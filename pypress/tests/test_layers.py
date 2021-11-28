@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 import tensorflow as tf
 
-from .. import layers
+from ..keras import layers
 
 
 def _test_data(n_samples: int) -> Tuple[pd.DataFrame, pd.Series]:

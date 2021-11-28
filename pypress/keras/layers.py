@@ -22,8 +22,8 @@ class PredictiveStateSimplex(tf.keras.layers.Dense):
     def __init__(
         self,
         n_states: int,
-        kernel_initializer="zeros",
-        bias_initializer="zero",
+        kernel_initializer: str = "zeros",
+        bias_initializer: str = "zeros",
         **kwargs,
     ):
         """Initializes the class.

@@ -5,7 +5,7 @@ from typing import Tuple
 import numpy as np
 import pandas as pd
 
-from .. import utils
+from ..keras import utils
 
 
 def _test_weights() -> Tuple[pd.DataFrame, pd.Series]:

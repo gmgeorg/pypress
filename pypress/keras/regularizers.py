@@ -2,7 +2,7 @@
 
 import tensorflow as tf
 
-from . import utils
+from .. import utils
 
 _EPS = 1e-6
 

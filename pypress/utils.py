@@ -6,7 +6,7 @@ import pandas as pd
 import tensorflow as tf
 import numpy as np
 
-from . import constants as con
+_STATE_COL = "state"
 
 
 def size_state(
@@ -15,7 +15,7 @@ def size_state(
     """Computes size of states as total sum of probabilities per state."""
     col_sums = weights.sum(axis=0)
     if isinstance(weights, pd.DataFrame):
-        col_sums.index.name = con.STATE_COL
+        col_sums.index.name = _STATE_COL
     return col_sums
 
 
