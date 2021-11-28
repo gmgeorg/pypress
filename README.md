@@ -67,3 +67,8 @@ Non-trainable params: 0
 
 
 See also the [`notebook/demo.ipynb`](notebooks/demo.ipynb) for end to end examples for PRESS regression and classification models.
+
+
+## License
+
+This software is licensed under Apache 2.0.
