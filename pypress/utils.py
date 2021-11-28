@@ -9,7 +9,7 @@ import numpy as np
 _STATE_COL = "state"
 
 
-def size_state(
+def state_size(
     weights: Union[pd.DataFrame, np.ndarray]
 ) -> Union[pd.Series, np.ndarray]:
     """Computes size of states as total sum of probabilities per state."""
@@ -19,19 +19,19 @@ def size_state(
     return col_sums
 
 
-def tf_size_state(weights: tf.Tensor) -> tf.Tensor:
+def tf_state_size(weights: tf.Tensor) -> tf.Tensor:
     """Computes size of states for input Tensor."""
     return tf.reduce_sum(weights, axis=0)
 
 
 def col_normalize(df: pd.DataFrame) -> pd.DataFrame:
     """Colum normalizes DataFrame (usually 'weights')."""
-    return df.divide(size_state(df), axis=1)
+    return df.divide(state_size(df), axis=1)
 
 
 def tf_col_normalize(x: tf.Tensor) -> tf.Tensor:
     """Computes column normalized tensor."""
-    return tf.divide(x, tf_size_state(x))
+    return tf.divide(x, tf_state_size(x))
 
 
 def agg_data_by_state(

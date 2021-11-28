@@ -5,7 +5,7 @@ from typing import Tuple
 import numpy as np
 import pandas as pd
 
-from ..keras import utils
+from .. import utils
 
 
 def _test_weights() -> Tuple[pd.DataFrame, pd.Series]:
@@ -21,7 +21,7 @@ def _test_weights() -> Tuple[pd.DataFrame, pd.Series]:
 
 def test_state_size():
     w, expected_size = _test_weights()
-    pd.testing.assert_series_equal(utils.size_state(w), expected_size)
+    pd.testing.assert_series_equal(utils.state_size(w), expected_size)
 
 
 def test_col_normalizer():
@@ -35,8 +35,8 @@ def test_col_normalizer():
 
 def test_tf_state_size():
     w, _ = _test_weights()
-    tf_s = utils.tf_size_state(w)
-    s = utils.size_state(w)
+    tf_s = utils.tf_state_size(w)
+    s = utils.state_size(w)
     np.testing.assert_allclose(s.values, tf_s.numpy())
 
 
