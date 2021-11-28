@@ -37,7 +37,7 @@ from pypress import regularizers
 
 mod = tf.keras.Sequential()
 # see layers.PRESS() for single layer wrapper
-mod.add(layers.PredictiveStatesSimplex(
+mod.add(layers.PredictiveStateSimplex(
             n_states=6,
             activity_regularizer=regularizers.Uniform(0.01),
             input_dim=X.shape[1]))
