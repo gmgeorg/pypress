@@ -31,9 +31,15 @@ there is a `PRESS()` wrapper feed-forward layer that applies both layers at once
 
 
 ```python
+from sklearn.datasets import load_breast_cancer
+import sklearn
+X, y = load_breast_cancer(return_X_y=True, as_frame=True)
+X_s = sklearn.preprocessing.robust_scale(X)  # See demo.ipynb to properly scale X with train/test split
+
+
 import tensorflow as tf
-from pypress import layers
-from pypress import regularizers
+from pypress.keras import layers
+from pypress.keras import regularizers
 
 mod = tf.keras.Sequential()
 # see layers.PRESS() for single layer wrapper
@@ -46,6 +52,7 @@ mod.compile(loss="binary_crossentropy",
             optimizer=tf.keras.optimizers.Nadam(learning_rate=0.01),
             metrics=[tf.keras.metrics.AUC(curve="PR", name="auc_pr")])
 mod.summary()
+mod.fit(X_s, y, epochs=10, validation_split=0.2)
 ```
 
 ```
@@ -53,8 +60,8 @@ Model: "sequential_12"
 _________________________________________________________________
  Layer (type)                Output Shape              Param #
 =================================================================
- predictive_states_simplex_1  (None, 6)                186
- 1 (PredictiveStatesSimplex)
+ predictive_state_simplex_1  (None, 6)                186
+ 1 (PredictiveStateSimplex)
 
  predictive_state_means_11 (  (None, 1)                6
  PredictiveStateMeans)
