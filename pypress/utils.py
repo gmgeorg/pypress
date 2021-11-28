@@ -10,12 +10,15 @@ _STATE_COL = "state"
 
 
 def state_size(
-    weights: Union[pd.DataFrame, np.ndarray]
+    weights: Union[pd.DataFrame, np.ndarray], normalize: bool = False
 ) -> Union[pd.Series, np.ndarray]:
     """Computes size of states as total sum of probabilities per state."""
     col_sums = weights.sum(axis=0)
     if isinstance(weights, pd.DataFrame):
         col_sums.index.name = _STATE_COL
+
+    if normalize:
+        col_sums /= col_sums.sum()
     return col_sums
 
 
