@@ -102,4 +102,4 @@ PRESS is similar to [mixture density networks (MDN)](https://publications.aston.
 
 ## License
 
-This software is licensed under Apache 2.0.
+This project is licensed under the terms of the MIT license. See [LICENSE](https://github.com/gmgeorg/pypress/blob/main/LICENSE) for additional details.
