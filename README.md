@@ -4,6 +4,7 @@
 ![TensorFlow](https://img.shields.io/badge/TensorFlow-%23FF6F00.svg?style=for-the-badge&logo=TensorFlow&logoColor=white)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=flat-square)](http://makeapullrequest.com)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![Github All Releases](https://img.shields.io/github/downloads/gmgeorg/pypress/total.svg)]()
 
 Predictive State Smoothing (PRESS) is a semi-parametric statistical machine learning algorithm
 for regression and classification problems. `pypress` is using TensorFlow Keras to implement 
