@@ -7,7 +7,7 @@ from .. import utils
 _EPS = 1e-6
 
 
-# @tf.keras.utils.register_keras_serializable(package="pypress", name="Entropy")
+@tf.keras.utils.register_keras_serializable(package="pypress")
 class Uniform(tf.keras.regularizers.Regularizer):
     """Penalizes weights if they are not uniform across columns (1 / J).
 
@@ -40,6 +40,7 @@ def _tr_kernel(weights: tf.Tensor) -> tf.Tensor:
     )
 
 
+@tf.keras.utils.register_keras_serializable(package="pypress")
 class DegreesOfFreedom(tf.keras.regularizers.Regularizer):
     """Penalizes weights if the resulting kernel matrix deviates from target degrees of freedom.
 

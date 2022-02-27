@@ -8,6 +8,7 @@ import tensorflow as tf
 from . import initializers as pr_init
 
 
+@tf.keras.utils.register_keras_serializable(package="pypress")
 class PredictiveStateSimplex(tf.keras.layers.Dense):
     """Layer that implements the predictive state simplex for PRESS model.
 
@@ -47,6 +48,7 @@ class PredictiveStateSimplex(tf.keras.layers.Dense):
         )
 
 
+@tf.keras.utils.register_keras_serializable(package="pypress")
 class PredictiveStateMeans(tf.keras.layers.Layer):
     """Layer that implements predicting from the predictive state simplex (input) to outputs.
 
@@ -115,6 +117,7 @@ class PredictiveStateMeans(tf.keras.layers.Layer):
         return config
 
 
+@tf.keras.utils.register_keras_serializable(package="pypress")
 class PRESS(tf.keras.layers.Layer):
     """Implements mixture distribution of features -> predictive state simplex -> outputs.
 
