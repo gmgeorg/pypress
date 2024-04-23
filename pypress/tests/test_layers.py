@@ -52,7 +52,7 @@ def test_use_in_model_works():
     model.add(layers.PredictiveStateMeans(1, "linear"))
     model.compile(loss="mse", optimizer=tf.keras.optimizers.Nadam(learning_rate=0.01))
 
-    model.fit(feats, y, epochs=3)
+    model.fit(feats, y, epochs=4)
     preds = model.predict(feats).ravel()
 
     cor_mat = np.corrcoef(preds, y)
@@ -68,7 +68,7 @@ def test_press_in_model_works():
     model.add(layers.PRESS(units=1, n_states=5, input_dim=feats.shape[1]))
     model.compile(loss="mse", optimizer=tf.keras.optimizers.Nadam(learning_rate=0.01))
 
-    model.fit(feats, y, epochs=3)
+    model.fit(feats, y, epochs=4)
     preds = model.predict(feats).ravel()
 
     cor_mat = np.corrcoef(preds, y)
