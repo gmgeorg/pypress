@@ -8,5 +8,5 @@ setup(
     author_email="im@gmge.org",
     description="Predictive State Smoothing (PRESS) in Python (keras)",
     packages=find_packages(),
-    install_requires=["numpy >= 1.11.0", "tensorflow ~= 2.11.0", "pandas >= 1.0.0"],
+    install_requires=["numpy >= 1.11.0", "tensorflow >= 2.11.0", "pandas >= 1.0.0"],
 )

@@ -48,7 +48,8 @@ def test_use_in_model_works():
     feats, y = _test_data(n_samples=1000)
 
     model = tf.keras.Sequential()
-    model.add(layers.PredictiveStateSimplex(5, input_dim=feats.shape[1]))
+    model.add(tf.keras.layers.Input(shape=(feats.shape[1],)))
+    model.add(layers.PredictiveStateSimplex(5))
     model.add(layers.PredictiveStateMeans(1, "linear"))
     model.compile(loss="mse", optimizer=tf.keras.optimizers.Nadam(learning_rate=0.01))
 
@@ -65,7 +66,8 @@ def test_press_in_model_works():
     feats, y = _test_data(n_samples=1000)
 
     model = tf.keras.Sequential()
-    model.add(layers.PRESS(units=1, n_states=5, input_dim=feats.shape[1]))
+    model.add(tf.keras.layers.Input(shape=(feats.shape[1],)))
+    model.add(layers.PRESS(units=1, n_states=5))
     model.compile(loss="mse", optimizer=tf.keras.optimizers.Nadam(learning_rate=0.01))
 
     model.fit(feats, y, epochs=4)
