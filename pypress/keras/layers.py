@@ -79,8 +79,8 @@ class PredictiveStateMeans(tf.keras.layers.Layer):
         self._state_conditional_means = None
 
     def build(self, input_shape: List[int]):
-        scm_shape = input_shape[1:] + [self._units]
-
+        input_shape = list(input_shape)
+        scm_shape = tuple(input_shape[1:] + [self._units])
         if self._predictive_state_means_init_logits is None:
             initializer = None
         else:
@@ -89,7 +89,7 @@ class PredictiveStateMeans(tf.keras.layers.Layer):
             )
 
         self._state_conditional_mean_logits = self.add_weight(
-            "state_conditional_mean_logits",
+            name="state_conditional_mean_logits",
             shape=scm_shape,
             initializer=initializer,
             trainable=True,
