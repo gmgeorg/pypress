@@ -2,9 +2,9 @@
 
 from typing import Union
 
+import numpy as np
 import pandas as pd
 import tensorflow as tf
-import numpy as np
 
 _STATE_COL = "state"
 
@@ -35,6 +35,13 @@ def col_normalize(df: pd.DataFrame) -> pd.DataFrame:
 def tf_col_normalize(x: tf.Tensor) -> tf.Tensor:
     """Computes column normalized tensor."""
     return tf.divide(x, tf_state_size(x))
+
+
+def tr_kernel(weights: tf.Tensor) -> tf.Tensor:
+    """Computes trace of kernel matrix implied by PRESS tensor."""
+    return tf.reduce_sum(
+        tf.linalg.diag_part(tf.matmul(tf.transpose(tf_col_normalize(weights)), weights))
+    )
 
 
 def agg_data_by_state(
