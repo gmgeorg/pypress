@@ -85,7 +85,7 @@ class PredictiveStateMeans(tf.keras.layers.Layer):
             initializer = None
         else:
             initializer = pr_init.PredictiveStateMeansInitializer(
-                self._predictive_state_means_init_logits, n_states=self._n_states
+                self._predictive_state_means_init_logits, n_states=self._units
             )
 
         self._state_conditional_mean_logits = self.add_weight(

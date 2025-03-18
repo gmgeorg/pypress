@@ -31,7 +31,7 @@ class Uniform(tf.keras.regularizers.Regularizer):
         return {"l1": float(self._l1)}
 
 
-def _tr_kernel(weights: tf.Tensor) -> tf.Tensor:
+def tr_kernel(weights: tf.Tensor) -> tf.Tensor:
     """Computes trace of kernel matrix implied by PRESS tensor."""
     return tf.reduce_sum(
         tf.linalg.diag_part(
@@ -76,7 +76,7 @@ class DegreesOfFreedom(tf.keras.regularizers.Regularizer):
 
     def __call__(self, x):
         """Computes penalty based on L1 deviation from target degrees of freedom."""
-        return self._l1 * tf.abs(_tr_kernel(x) - self._df)
+        return self._l1 * tf.abs(tr_kernel(x) - self._df)
 
     def get_config(self):
         return {"l1": float(self._l1), "df": float(self._df)}
