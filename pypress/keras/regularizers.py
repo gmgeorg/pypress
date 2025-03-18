@@ -16,6 +16,12 @@ class Uniform(tf.keras.regularizers.Regularizer):
     """
 
     def __init__(self, l1: float = 0.0, **kwargs):
+        """Initializes the uniform regularizer.
+
+        Args:
+          l1: penalty term.
+          **kwargs: addl keyword arguments to regularizers.
+        """
         super().__init__(**kwargs)
         self._l1 = l1
 
@@ -28,16 +34,8 @@ class Uniform(tf.keras.regularizers.Regularizer):
         )
 
     def get_config(self):
+        """Gets the config."""
         return {"l1": float(self._l1)}
-
-
-def tr_kernel(weights: tf.Tensor) -> tf.Tensor:
-    """Computes trace of kernel matrix implied by PRESS tensor."""
-    return tf.reduce_sum(
-        tf.linalg.diag_part(
-            tf.matmul(tf.transpose(utils.tf_col_normalize(weights)), weights)
-        )
-    )
 
 
 @tf.keras.utils.register_keras_serializable(package="pypress")
@@ -63,7 +61,7 @@ class DegreesOfFreedom(tf.keras.regularizers.Regularizer):
     to target value.
     """
 
-    def __init__(self, l1: float = 0.0, df: float = 1.0):
+    def __init__(self, l1: float = 0.0, df: float = 1.0, **kwargs):
         """Initializes the regularizer.
 
         Args:
@@ -71,12 +69,14 @@ class DegreesOfFreedom(tf.keras.regularizers.Regularizer):
           df: degrees of freedom parameter target value. Must be >= 1.
         """
         assert df >= 1.0, f"Target for degrees of freedom must be >= 1. Got {df}."
+        super().__init__(**kwargs)
         self._df = df
         self._l1 = l1
 
     def __call__(self, x):
         """Computes penalty based on L1 deviation from target degrees of freedom."""
-        return self._l1 * tf.abs(tr_kernel(x) - self._df)
+        return self._l1 * tf.abs(utils.tr_kernel(x) - self._df)
 
     def get_config(self):
+        """Gets the config."""
         return {"l1": float(self._l1), "df": float(self._df)}
