@@ -30,10 +30,6 @@ def _get_predictive_state_means_init(
     raise RuntimeError(f"Wrong inputs. Got {init_value}")
 
 
-def _array_initializer(init_value, units, n_states):
-    return lambda: _get_predictive_state_means_init(init_value, n_states, units)
-
-
 @tf.keras.utils.register_keras_serializable(package="pypress")
 class PredictiveStateMeansInitializer(tf.keras.initializers.Initializer):
     """Initializer for weights of the PredictiveStateMeans() layer."""

@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="pypress",
-    version="0.0.2",
+    version="0.0.3",
     url="https://github.com/gmgeorg/pypress.git",
     author="Georg M. Goerg",
     author_email="im@gmge.org",
