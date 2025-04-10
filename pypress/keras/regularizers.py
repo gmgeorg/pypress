@@ -163,9 +163,6 @@ class CombinedRegularizer(tf.keras.regularizers.Regularizer):
             ]
         }
         return config
-        # base_config = super().get_config()
-        # base_config = {}
-        # return {**base_config, **config}
 
     @classmethod
     def from_config(cls, config):
