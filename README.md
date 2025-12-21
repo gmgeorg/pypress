@@ -7,7 +7,7 @@
 [![Github All Releases](https://img.shields.io/github/downloads/gmgeorg/pypress/total.svg)]()
 
 Predictive State Smoothing (PRESS) is a semi-parametric statistical machine learning algorithm
-for regression and classification problems. `pypress` is using TensorFlow Keras to implement 
+for regression and classification problems. `pypress` is using TensorFlow Keras to implement
 the predictive learning algorithms proposed in
 
 
@@ -77,28 +77,34 @@ Non-trainable params: 0
 
 See also the [`notebook/demo.ipynb`](notebooks/demo.ipynb) for end to end examples for PRESS regression and classification models.
 
-
-
 # PRESS in a nutshell <a name="nutshell"/>
 
-Figure below from Goerg (2018) illustrates the difference between a standard feed-forward DNN and the PRESS version of it.
+The figure below, adapted from **Goerg (2018)**, contrasts the architecture of a standard feed-forward Deep Neural Network (DNN) with the **Predictive State Smoothing (PRESS)** approach.
+
 ![PRESS architecture](imgs/press_architecture.png)
 
-For prediction problems we are interested in learning the conditional distribution (expectation) p(y | X) (E(y | X)). 
-In standard feed-forward neural networks, the network estimates
-E(y | X) by directly mapping X to its output through a (highly) non-linear function (Fig 3a above). 
+### 1. Standard Feed-Forward DNNs
+In typical prediction problems, our goal is to model the conditional distribution $p(y \mid X)$ or the conditional expectation $E[y \mid X]$. A standard feed-forward network estimates this by directly mapping features ($X$) to an output through a series of highly non-linear transformations (as seen in Figure 3a).
 
-PRESS decomposes the predictive distribution first into a particular type of mixture distribution over so-called *predictive states*, that has the property that conditioned 
-on the predictive state, the outputs are conditional independent of the features given their state.
+### 2. The PRESS Decomposition
+In contrast, PRESS decomposes the predictive distribution into a mixture distribution over **predictive states** ($S$). This architecture relies on a critical property: conditioned on a predictive state $j$, the output ($y$) becomes conditionally independent of the input features ($X$).
 
-<img src="https://render.githubusercontent.com/render/math?math=p(y \mid X) = \sum_{j=1}^{J} p(y \mid s_j, X) \cdot p(s_j \mid X) = \sum_{j=1}^{J} p(y \mid s_j) \cdot p(s_j \mid X)">
+Mathematically, this is expressed as:
 
-where the second equality follows from conditional independence of y and X given state j.
+![PRESS equation](imgs/press_decomposition_equation.png)
 
-The advantage of this decomposition is that the predictive states are the minimal sufficient statistic for predicting y, ie it is an optimal summary of the features that has best compression of information to predict y.  A by-result of this learning setup is that once the mapping from features X to predictive state simplex has been learned, the predictive states can be used to cluster observations in the predictive state space. Observations with the same (similar) predictive state have the guaranteed property that they have the same (similar) predictive
-distribution for y.  For more details see papers referenced above and references therein.
+The second equality holds because the state $j$ captures all relevant information from $X$ necessary to predict $y$, rendering the raw features redundant once the state is known.
 
-PRESS is similar to [mixture density networks (MDN)](https://publications.aston.ac.uk/id/eprint/373/1/NCRG_94_004.pdf), however, because of conditional independence of outcome (y) and features (X), conditioned on the predictive states (S), the output mean predictions in PRESS are not functions of the features directly, but only are only conditioned on their predictive state.
+### 3. Key Advantages and Clustering
+The primary strength of this decomposition is that predictive states serve as **minimal sufficient statistics** for $y$. They provide an optimal informational summary—maximizing compression while retaining full predictive power.
+
+An important byproduct of this framework is the ability to perform **predictive clustering**:
+* Once the mapping from features ($X$) to the predictive state simplex is learned, observations can be clustered within the state space.
+* Observations sharing similar predictive states are guaranteed to have similar predictive distributions for $y$, providing a principled way to group data based on future outcomes rather than raw input similarity.
+
+### 4. Comparison to Mixture Density Networks (MDN)
+
+While PRESS shares similarities with [Mixture Density Networks (MDN)](https://publications.aston.ac.uk/id/eprint/373/1/NCRG_94_004.pdf), there is a fundamental distinction. In an MDN, the output parameters are often direct functions of the features. In **PRESS**, the conditional independence of $y$ and $X$ given $S$ ensures that the output means are conditioned *only* on the predictive state, not the raw features.
 
 
 ## License
