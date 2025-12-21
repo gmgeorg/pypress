@@ -11,7 +11,7 @@ repos:
     rev: v2.4.1
     hooks:
       - id: codespell
-        args: [--ignore-numbers, --skip='\*.json,\*.csv', --quiet-level=3]
+        args: ['--skip=*.json,*.csv', '--quiet-level=3']
         files: '\.md$'
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
