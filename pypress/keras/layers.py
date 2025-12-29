@@ -97,7 +97,7 @@ class PredictiveStateMeans(tf.keras.layers.Layer):
         self,
         units: int,
         activation: Union[str, tf.keras.layers.Activation] = "linear",
-        predictive_state_means_init_logits: Optional[np.ndarray] = None,
+        init_values: Optional[Union[float, np.ndarray]] = None,
         **kwargs,
     ):
         """Initializes the PredictiveStateMeans layer.
@@ -111,17 +111,19 @@ class PredictiveStateMeans(tf.keras.layers.Layer):
                 - "linear": for regression (default)
                 - "sigmoid": for binary classification or bounded outputs
                 - "softmax": for multi-class classification (when units > 1)
-            predictive_state_means_init_logits: Optional numpy array for custom
-                initialization of state-conditional mean logits. If None, uses default
-                Keras initialization. Can be:
-                - A scalar: all means initialized to this value
+            init_values: Optional initialization values on original scale (after activation).
+                If None, uses default Keras initialization. Can be:
+                - A scalar: all means initialized to this value (on original scale)
                 - A 1D array of shape (units,): broadcast across all states
+                Examples:
+                - For regression: init_values=np.mean(y_train, axis=0)
+                - For classification with sigmoid: init_values=0.8 (80% probability)
             **kwargs: Additional keyword arguments passed to Layer().
         """
         super().__init__(**kwargs)
         self._units = units
         self._activation = activation
-        self._predictive_state_means_init_logits = predictive_state_means_init_logits
+        self._init_values = init_values
 
         self._activation_layer = (
             tf.keras.layers.Activation(self._activation)
@@ -143,11 +145,26 @@ class PredictiveStateMeans(tf.keras.layers.Layer):
         """
         input_shape = list(input_shape)
         scm_shape = tuple(input_shape[1:] + [self._units])
-        if self._predictive_state_means_init_logits is None:
+
+        # Create initializer if init_values is provided
+        if self._init_values is None:
             initializer = None
         else:
+            # Get activation string (required for initializer)
+            if isinstance(self._activation, str):
+                activation_str = self._activation
+            else:
+                raise ValueError(
+                    "When using init_values, activation must be a string "
+                    "(e.g., 'linear', 'sigmoid'). Custom activation layers are not "
+                    "supported with automatic initialization."
+                )
+
             initializer = pr_init.PredictiveStateMeansInitializer(
-                self._predictive_state_means_init_logits, n_states=self._units
+                init_values=self._init_values,
+                n_states=input_shape[1],
+                activation=activation_str,
+                units=self._units,
             )
 
         self._state_conditional_mean_logits = self.add_weight(
@@ -201,14 +218,14 @@ class PredictiveStateMeans(tf.keras.layers.Layer):
             Dictionary containing the layer configuration with keys:
             - units: Number of output units
             - activation: Activation function specification
-            - predictive_state_means_init_logits: Initial logits (if provided)
+            - init_values: Initial values on original scale (if provided)
         """
         config = super().get_config()
         config.update(
             {
                 "units": self._units,
                 "activation": self._activation,
-                "predictive_state_means_init_logits": self._predictive_state_means_init_logits,
+                "init_values": self._init_values,
             }
         )
         return config
@@ -362,7 +379,7 @@ class PredictiveStateParams(tf.keras.layers.Layer):
         n_params_per_state: int,
         activations: ActivationSpec = "linear",
         flatten_output: bool = True,
-        init_logits: Optional[np.ndarray] = None,
+        init_values: Optional[Sequence[Union[float, np.ndarray]]] = None,
         **kwargs,
     ):
         """Initializes the PredictiveStateParams layer.
@@ -377,10 +394,12 @@ class PredictiveStateParams(tf.keras.layers.Layer):
             flatten_output: If True, output shape is (batch_size, n_states * n_params_per_state)
                 with parameter-first ordering. If False, output shape is
                 (batch_size, n_states, n_params_per_state).
-            init_logits: Optional numpy array of shape (n_states, n_params_per_state)
-                for custom initialization of parameter logits. If None, uses
-                "glorot_uniform" initialization. If provided, the first dimension
-                (n_states) must match the input shape.
+            init_values: Optional sequence of initial values on original scale (after activation).
+                Must be a list/array of length n_params_per_state, one value per parameter.
+                Each element can be a scalar. If None, uses "glorot_uniform" initialization.
+                Examples:
+                - For Gaussian [mean, std]: init_values=[0.0, 1.0]
+                - For Beta [alpha, beta]: init_values=[2.0, 2.0]
             **kwargs: Additional keyword arguments passed to Layer().
 
         Note:
@@ -392,7 +411,7 @@ class PredictiveStateParams(tf.keras.layers.Layer):
         self._n_params_per_state = int(n_params_per_state)
         self._activations = activations
         self._flatten_output = bool(flatten_output)
-        self._init_logits = init_logits
+        self._init_values = init_values
 
         # Build activation layers now (no weights needed)
         self._activation_layers = self._make_activation_layers(
@@ -448,14 +467,33 @@ class PredictiveStateParams(tf.keras.layers.Layer):
         input_shape = list(input_shape)
         self._n_states = input_shape[1]  # Infer n_states from input
 
-        if self._init_logits is not None:
-            # Validate init_logits shape if provided
-            if self._init_logits.shape[0] != self._n_states:
+        # Create initializer if init_values is provided
+        if self._init_values is not None:
+            # Get activation strings (required for initializer)
+            activation_strs = []
+            if isinstance(self._activations, str):
+                activation_strs = [self._activations] * self._n_params_per_state
+            elif isinstance(self._activations, tf.keras.layers.Layer):
                 raise ValueError(
-                    f"init_logits first dimension {self._init_logits.shape[0]} "
-                    f"does not match inferred n_states {self._n_states} from input_shape."
+                    "When using init_values, activations must be strings. "
+                    "Custom activation layers are not supported with automatic initialization."
                 )
-            init = tf.constant_initializer(self._init_logits)
+            else:
+                # Sequence of activations
+                for act in self._activations:
+                    if isinstance(act, str):
+                        activation_strs.append(act)
+                    else:
+                        raise ValueError(
+                            "When using init_values, all activations must be strings. "
+                            "Custom activation layers are not supported."
+                        )
+
+            init = pr_init.PredictiveStateParamsInitializer(
+                init_values=self._init_values,
+                n_states=self._n_states,
+                activations=activation_strs,
+            )
         else:
             init = "glorot_uniform"
 
@@ -559,7 +597,7 @@ class PredictiveStateParams(tf.keras.layers.Layer):
                 n_params_per_state=self._n_params_per_state,
                 activations=self._activations,
                 flatten_output=self._flatten_output,
-                init_logits=self._init_logits,
+                init_values=self._init_values,
             )
         )
         return config

@@ -215,26 +215,30 @@ class TestPredictiveStateParams:
                 rtol=1e-5,
             )
 
-    def test_init_logits(self):
-        """Test initialization with custom logits."""
+    def test_init_values(self):
+        """Test initialization with custom values on original scale."""
         n_states = 2
         n_params = 2
 
-        # Custom initialization
-        init_values = np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32)
+        # Custom initialization - values on original scale
+        # With linear activation, these become the logits directly
+        custom_values = [1.0, 2.0]  # One value per parameter
 
         layer = layers.PredictiveStateParams(
             n_params_per_state=n_params,
             activations="linear",  # Use linear to check exact values
-            init_logits=init_values,
+            init_values=custom_values,
             flatten_output=False,
         )
 
         inputs = tf.ones((1, n_states))
         outputs = layer(inputs)
 
-        # With linear activation, outputs should match init values
-        np.testing.assert_allclose(outputs[0].numpy(), init_values, rtol=1e-5)
+        # With linear activation, outputs should match init values broadcasted to all states
+        expected = np.array(
+            [[1.0, 2.0], [1.0, 2.0]], dtype=np.float32
+        )  # (n_states, n_params)
+        np.testing.assert_allclose(outputs[0].numpy(), expected, rtol=1e-5)
 
     def test_compute_output_shape(self):
         """Test compute_output_shape method."""
