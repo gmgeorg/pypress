@@ -1,6 +1,6 @@
 [project]
 name = "pypress"
-version = "0.1.0"
+version = "0.1.1"
 description = "Predictive State Smoothing (PRESS) in Python (keras)"
 authors = [
     {name = "Georg M. Goerg",email = "im@gmge.org"}
