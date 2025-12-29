@@ -126,9 +126,9 @@ def initialize_from_y(
             np.ndarray of shape (units, n_states) with state-conditional means,
             suitable for init_values in PredictiveStateMeans.
         If return_params=True:
-            Tuple of (means_array, stds_array) where each is shape (n_states,),
-            suitable for init_values in PredictiveStateParams with
-            activations=["linear", "softplus"].
+            np.ndarray of shape (n_params_per_state, n_states) where
+            row 0 is means and row 1 is stds, suitable for init_values in
+            PredictiveStateParams with activations=["linear", "softplus"].
 
     Example:
         >>> # For PredictiveStateMeans
@@ -177,9 +177,10 @@ def initialize_from_y(
     cluster_stds = gmm.covariances_  # Shape: (n_states,)
 
     if return_params:
-        # Return format for PredictiveStateParams: (means_array, stds_array)
-        # Each array has shape (n_states,) with state-specific parameters
-        return (cluster_means, cluster_stds)
+        # Return format for PredictiveStateParams: (n_params_per_state, n_states) array
+        # Row 0: means, Row 1: stds
+        init_values = np.vstack([cluster_means, cluster_stds])  # Shape: (2, n_states)
+        return init_values
     else:
         # Return format for PredictiveStateMeans: (units, n_states) array
         # Each row represents one output dimension, columns are states

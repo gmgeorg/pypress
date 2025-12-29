@@ -155,7 +155,7 @@ class PredictiveStateMeansInitializer(tf.keras.initializers.Initializer):
 
 
 def _get_predictive_state_params_init(
-    init_values: Sequence[Union[float, np.ndarray]],
+    init_values: Union[Sequence[Union[float, np.ndarray]], np.ndarray],
     n_states: int,
     n_params_per_state: int,
     activations: Sequence[str],
@@ -166,8 +166,11 @@ def _get_predictive_state_params_init(
     activation functions for each parameter.
 
     Args:
-        init_values: Sequence of initial values (one per parameter) on original scale.
-            Each element can be a scalar or 1D array. Must have length n_params_per_state.
+        init_values: Either:
+            - Sequence of initial values (one per parameter) on original scale.
+              Each element can be a scalar or 1D array. Must have length n_params_per_state.
+            - np.ndarray of shape (n_params_per_state, n_states) with state-specific
+              values for each parameter (e.g., from initialize_from_y with return_params=True).
         n_states: Number of predictive states.
         n_params_per_state: Number of parameters per state.
         activations: Sequence of activation function names (one per parameter).
@@ -176,12 +179,25 @@ def _get_predictive_state_params_init(
         TensorFlow variable with initial logits of shape (n_states, n_params_per_state).
 
     Raises:
-        ValueError: If init_values length doesn't match n_params_per_state or if
+        ValueError: If init_values shape doesn't match expectations or if
             activations are not supported.
     """
-    if len(init_values) != n_params_per_state:
+    # Check if init_values is a 2D array with shape (n_params_per_state, n_states)
+    if isinstance(init_values, np.ndarray) and len(init_values.shape) == 2:
+        if init_values.shape != (n_params_per_state, n_states):
+            raise ValueError(
+                f"init_values as 2D array must have shape ({n_params_per_state}, {n_states}), "
+                f"got {init_values.shape}"
+            )
+        # Convert to list of 1D arrays, one per parameter
+        init_values_list = [init_values[i, :] for i in range(n_params_per_state)]
+    else:
+        # Already a sequence/list
+        init_values_list = init_values
+
+    if len(init_values_list) != n_params_per_state:
         raise ValueError(
-            f"init_values must have length {n_params_per_state}, got {len(init_values)}"
+            f"init_values must have length {n_params_per_state}, got {len(init_values_list)}"
         )
 
     if len(activations) != n_params_per_state:
@@ -191,22 +207,32 @@ def _get_predictive_state_params_init(
 
     # Build initialized values for each parameter
     param_logits = []
-    for i, (init_val, activation) in enumerate(zip(init_values, activations)):
+    for i, (init_val, activation) in enumerate(zip(init_values_list, activations)):
         # Get inverse activation for this parameter
         inverse_fn = get_inverse_activation(activation)
 
         # Build value on original scale (n_states,)
         if isinstance(init_val, (float, int)):
+            # Scalar: broadcast to all states
             val = np.ones(n_states) * init_val
         elif isinstance(init_val, np.ndarray):
             if len(init_val.shape) == 0:  # scalar array
                 val = np.ones(n_states) * float(init_val)
-            elif len(init_val.shape) == 1 and init_val.shape[0] == 1:
-                # Single element array
-                val = np.ones(n_states) * init_val[0]
+            elif len(init_val.shape) == 1:
+                if init_val.shape[0] == 1:
+                    # Single element array: broadcast to all states
+                    val = np.ones(n_states) * init_val[0]
+                elif init_val.shape[0] == n_states:
+                    # State-specific values: one value per state
+                    val = init_val
+                else:
+                    raise ValueError(
+                        f"init_values[{i}] must have length 1 or {n_states}, "
+                        f"got shape {init_val.shape}"
+                    )
             else:
                 raise ValueError(
-                    f"init_values[{i}] must be scalar or single-element array, "
+                    f"init_values[{i}] must be scalar or 1D array, "
                     f"got shape {init_val.shape}"
                 )
         else:

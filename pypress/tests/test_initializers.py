@@ -496,3 +496,111 @@ def test_predictive_state_params_initializer_state_specific_gaussian():
             rtol=1e-5,
             err_msg=f"State {state_idx} parameters don't match",
         )
+
+
+def test_predictive_state_params_with_gmm_initialization():
+    """Test PredictiveStateParams initialization from GMM-fitted data.
+
+    This test mirrors the user's real-world workflow:
+    1. Fit GMM on training data
+    2. Get state-specific means and stds
+    3. Initialize PredictiveStateParams with these values
+    4. Verify layer parameters match GMM cluster parameters
+    """
+    from pypress.keras.layers import PredictiveStateParams
+    from pypress.keras.initializers import _get_predictive_state_params_init
+
+    # Simulate GMM output: state-specific means and stds for 5 states
+    # These values are based on the user's example
+    gmm_means = np.array(
+        [51.45622837, 54.08271024, 59.45939443, 62.22514338, 64.99989574]
+    )
+    gmm_stds = np.array([0.59025396, 0.30075941, 0.69655763, 0.36143501, 0.02765671])
+
+    n_states = 5
+    n_params_per_state = 2
+    activations = ["linear", "softplus"]  # mean: linear, std: softplus
+
+    # Test 1: Direct call to _get_predictive_state_params_init with 2D array
+    # Shape: (n_params_per_state, n_states) = (2, 5)
+    init_values_gmm = np.vstack([gmm_means, gmm_stds])
+    assert init_values_gmm.shape == (n_params_per_state, n_states)
+
+    logits = _get_predictive_state_params_init(
+        init_values_gmm, n_states, n_params_per_state, activations
+    )
+
+    # Verify shape
+    assert logits.shape == (n_states, n_params_per_state)
+
+    # Apply activations to recover original values
+    recovered_means = logits[:, 0].numpy()  # linear activation
+    recovered_stds = tf.nn.softplus(logits[:, 1]).numpy()  # softplus activation
+
+    # Check that recovered values match GMM cluster parameters
+    np.testing.assert_allclose(recovered_means, gmm_means, rtol=1e-5)
+    np.testing.assert_allclose(recovered_stds, gmm_stds, rtol=1e-5)
+
+    # Test 2: Use in actual PredictiveStateParams layer
+    layer = PredictiveStateParams(
+        n_params_per_state=n_params_per_state,
+        activations=activations,
+        init_values=init_values_gmm,
+        flatten_output=False,
+    )
+
+    # Build the layer
+    batch_size = 10
+    dummy_input = tf.ones((batch_size, n_states))
+    _ = layer(dummy_input)
+
+    # Get the layer's state-conditional parameters (on original scale)
+    output_params = layer.state_conditional_params
+
+    # Verify shape
+    assert output_params.shape == (n_states, n_params_per_state)
+
+    # Extract means and stds
+    output_means = output_params[:, 0].numpy()
+    output_stds = output_params[:, 1].numpy()
+
+    # Verify each state has its GMM-fitted parameters
+    np.testing.assert_allclose(
+        output_means,
+        gmm_means,
+        rtol=1e-5,
+        err_msg="Layer means don't match GMM cluster means",
+    )
+    np.testing.assert_allclose(
+        output_stds,
+        gmm_stds,
+        rtol=1e-5,
+        err_msg="Layer stds don't match GMM cluster stds",
+    )
+
+    # Test 3: Verify each state outputs its specific parameters
+    for state_idx in range(n_states):
+        # Create one-hot input for this state
+        one_hot_input = tf.one_hot([state_idx], depth=n_states, dtype=tf.float32)
+        output = layer(one_hot_input)
+
+        # Output shape: (1, n_states, n_params_per_state)
+        assert output.shape == (1, n_states, n_params_per_state)
+
+        # Extract parameters for this state
+        state_mean = output[0, state_idx, 0].numpy()
+        state_std = output[0, state_idx, 1].numpy()
+
+        # Verify they match the GMM values for this state
+        np.testing.assert_allclose(
+            state_mean,
+            gmm_means[state_idx],
+            rtol=1e-5,
+            err_msg=f"State {state_idx} mean doesn't match GMM",
+        )
+        np.testing.assert_allclose(
+            state_std,
+            gmm_stds[state_idx],
+            rtol=1e-5,
+            err_msg=f"State {state_idx} std doesn't match GMM",
+        )
