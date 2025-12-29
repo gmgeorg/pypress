@@ -40,16 +40,26 @@ def _get_predictive_state_means_init(
     ones = np.ones((n_states, units))
     val = None
     if isinstance(init_values, (float, int)):
+        # Scalar: broadcast to all states and units
         val = ones * init_values
     elif isinstance(init_values, np.ndarray):
-        assert init_values.shape[0] == units, (
-            f"init_values shape[0]={init_values.shape[0]} must match units={units}"
-        )
         if len(init_values.shape) == 1:
-            # Broadcast (units,) to (n_states, units)
+            # Shape (units,): broadcast to all states
+            assert init_values.shape[0] == units, (
+                f"init_values shape[0]={init_values.shape[0]} must match units={units}"
+            )
             val = ones * init_values[np.newaxis, :]
+        elif len(init_values.shape) == 2:
+            # Shape (units, n_states): state-specific values, transpose to (n_states, units)
+            assert init_values.shape[0] == units, (
+                f"init_values shape[0]={init_values.shape[0]} must match units={units}"
+            )
+            assert init_values.shape[1] == n_states, (
+                f"init_values shape[1]={init_values.shape[1]} must match n_states={n_states}"
+            )
+            val = init_values.T  # Transpose from (units, n_states) to (n_states, units)
         else:
-            raise ValueError("Initial values must be a 1D array (row vector).")
+            raise ValueError("Initial values must be a scalar, 1D array, or 2D array.")
     else:
         raise ValueError(
             f"'init_values' must be float or np.ndarray. Got {type(init_values)}."

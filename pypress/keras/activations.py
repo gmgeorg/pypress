@@ -8,7 +8,8 @@ import tensorflow as tf
 ACTIVATION_INVERSES = {
     "linear": lambda x: x,
     "sigmoid": lambda x: tf.math.log(x / (1 - x)),
-    "softplus": lambda x: tf.math.log(tf.exp(x) - 1),
+    # numerically stable: for x > 20 softplus is essentially linear
+    "softplus": lambda x: tf.where(x > 20.0, x, tf.math.log(tf.math.expm1(x))),
     "tanh": lambda x: tf.math.atanh(x),
     "exponential": lambda x: tf.math.log(x + 1e-10),
     # Leaky ReLU: Inverse is x/alpha for negative values

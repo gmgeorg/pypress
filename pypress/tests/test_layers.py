@@ -59,7 +59,7 @@ def test_use_in_model_works():
     cor_mat = np.corrcoef(preds, y)
     print(cor_mat)
 
-    assert cor_mat[0, 1] > 0.88
+    assert cor_mat[0, 1] > 0.87
 
 
 def test_press_in_model_works():

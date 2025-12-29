@@ -151,16 +151,27 @@ def test_get_predictive_state_means_init_with_1d_array():
     np.testing.assert_allclose(result.numpy(), expected)
 
 
-def test_get_predictive_state_means_init_invalid_array():
-    """Test that providing an invalid array shape raises a ValueError."""
+def test_get_predictive_state_means_init_with_2d_array():
+    """Test that a 2D array with shape (units, n_states) works correctly."""
     units = 4
     n_states = 3
-    # Here, init_values is a 2D array (column vector) instead of a 1D row vector.
-    init_values = np.array([[0.1], [0.2], [0.3], [0.4]])
-    with pytest.raises(ValueError, match="must be a 1D array"):
-        _get_predictive_state_means_init(
-            init_values, n_states, units, activation="linear"
-        )
+    # State-specific initialization: shape (units, n_states)
+    init_values = np.array(
+        [
+            [1.0, 2.0, 3.0],  # unit 0 has different values for each state
+            [4.0, 5.0, 6.0],  # unit 1 has different values for each state
+            [7.0, 8.0, 9.0],  # unit 2 has different values for each state
+            [10.0, 11.0, 12.0],  # unit 3 has different values for each state
+        ]
+    )
+
+    # With linear activation, logits should be transposed from (units, n_states) to (n_states, units)
+    expected = init_values.T  # Shape: (3, 4)
+    result = _get_predictive_state_means_init(
+        init_values, n_states, units, activation="linear"
+    )
+    np.testing.assert_allclose(result.numpy(), expected)
+    assert isinstance(result, tf.Variable)
 
 
 def test_get_predictive_state_means_init_invalid_type():
