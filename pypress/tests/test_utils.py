@@ -221,13 +221,16 @@ def test_initialize_from_y_params():
     y = np.random.randn(200) + 10  # Mean 10, std 1
 
     n_states = 3
+    n_params_per_state = 2
     init_values = utils.initialize_from_y(y, n_states=n_states, return_params=True)
 
-    # Should return tuple of (means_array, stds_array)
-    assert isinstance(init_values, tuple)
-    assert len(init_values) == 2
+    # Should return array of shape (n_params_per_state, n_states)
+    assert isinstance(init_values, np.ndarray)
+    assert init_values.shape == (n_params_per_state, n_states)
 
-    means_array, stds_array = init_values
+    # Row 0: means, Row 1: stds
+    means_array = init_values[0, :]
+    stds_array = init_values[1, :]
 
     # Each should be shape (n_states,)
     assert means_array.shape == (n_states,)

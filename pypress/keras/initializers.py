@@ -155,7 +155,7 @@ class PredictiveStateMeansInitializer(tf.keras.initializers.Initializer):
 
 
 def _get_predictive_state_params_init(
-    init_values: Sequence[Union[float, np.ndarray]],
+    init_values: np.ndarray,
     n_states: int,
     n_params_per_state: int,
     activations: Sequence[str],
@@ -166,8 +166,10 @@ def _get_predictive_state_params_init(
     activation functions for each parameter.
 
     Args:
-        init_values: Sequence of initial values (one per parameter) on original scale.
-            Each element can be a scalar or 1D array. Must have length n_params_per_state.
+        init_values: np.ndarray of shape (n_params_per_state, n_states) with
+            state-specific values for each parameter. Each row represents one
+            parameter, columns are states. Use initialize_from_y with
+            return_params=True to generate this from data.
         n_states: Number of predictive states.
         n_params_per_state: Number of parameters per state.
         activations: Sequence of activation function names (one per parameter).
@@ -176,12 +178,21 @@ def _get_predictive_state_params_init(
         TensorFlow variable with initial logits of shape (n_states, n_params_per_state).
 
     Raises:
-        ValueError: If init_values length doesn't match n_params_per_state or if
-            activations are not supported.
+        ValueError: If init_values shape doesn't match (n_params_per_state, n_states).
     """
-    if len(init_values) != n_params_per_state:
+    # Convert to numpy array if needed
+    init_values = np.asarray(init_values)
+
+    # Check shape
+    if len(init_values.shape) != 2:
         raise ValueError(
-            f"init_values must have length {n_params_per_state}, got {len(init_values)}"
+            f"init_values must be a 2D array, got shape {init_values.shape}"
+        )
+
+    if init_values.shape != (n_params_per_state, n_states):
+        raise ValueError(
+            f"init_values must have shape ({n_params_per_state}, {n_states}), "
+            f"got {init_values.shape}"
         )
 
     if len(activations) != n_params_per_state:
@@ -191,28 +202,12 @@ def _get_predictive_state_params_init(
 
     # Build initialized values for each parameter
     param_logits = []
-    for i, (init_val, activation) in enumerate(zip(init_values, activations)):
+    for i, activation in enumerate(activations):
         # Get inverse activation for this parameter
         inverse_fn = get_inverse_activation(activation)
 
-        # Build value on original scale (n_states,)
-        if isinstance(init_val, (float, int)):
-            val = np.ones(n_states) * init_val
-        elif isinstance(init_val, np.ndarray):
-            if len(init_val.shape) == 0:  # scalar array
-                val = np.ones(n_states) * float(init_val)
-            elif len(init_val.shape) == 1 and init_val.shape[0] == 1:
-                # Single element array
-                val = np.ones(n_states) * init_val[0]
-            else:
-                raise ValueError(
-                    f"init_values[{i}] must be scalar or single-element array, "
-                    f"got shape {init_val.shape}"
-                )
-        else:
-            raise ValueError(
-                f"init_values[{i}] must be float or np.ndarray, got {type(init_val)}"
-            )
+        # Get state-specific values for this parameter (row i)
+        val = init_values[i, :]  # Shape: (n_states,)
 
         # Convert to logits
         val_logits = inverse_fn(tf.constant(val, dtype=tf.float32))
