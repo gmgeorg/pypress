@@ -324,14 +324,22 @@ def test_predictive_state_means_layer_with_sigmoid_init():
 
 def test_predictive_state_params_initializer_gaussian():
     """Test PredictiveStateParamsInitializer with Gaussian (mean, std) parameters."""
-    # Gaussian distribution with mean=0.0, std=1.0
+    # Gaussian distribution with mean=0.0, std=1.0 (broadcast to all states)
     init_mean = 0.0
     init_std = 1.0
     n_states = 4
     activations = ["linear", "softplus"]  # mean: linear, std: softplus
 
+    # Create 2D array with shape (n_params_per_state, n_states)
+    init_values = np.array(
+        [
+            [init_mean] * n_states,  # Row 0: means for all states
+            [init_std] * n_states,  # Row 1: stds for all states
+        ]
+    )
+
     initializer = PredictiveStateParamsInitializer(
-        init_values=[init_mean, init_std], n_states=n_states, activations=activations
+        init_values=init_values, n_states=n_states, activations=activations
     )
 
     shape = (n_states, 2)  # 2 params per state
@@ -361,15 +369,24 @@ def test_predictive_state_params_layer_with_gaussian_init():
     """Test PredictiveStateParams layer with Gaussian (mean, std) initialization."""
     from pypress.keras.layers import PredictiveStateParams
 
-    # Initialize Gaussian parameters: mean=0.5, std=2.0
+    # Initialize Gaussian parameters: mean=0.5, std=2.0 (broadcast to all states)
     init_mean = 0.5
     init_std = 2.0
     n_states = 3
+    n_params_per_state = 2
+
+    # Create 2D array with shape (n_params_per_state, n_states)
+    init_values = np.array(
+        [
+            [init_mean] * n_states,  # Row 0: means for all states
+            [init_std] * n_states,  # Row 1: stds for all states
+        ]
+    )
 
     layer = PredictiveStateParams(
-        n_params_per_state=2,
+        n_params_per_state=n_params_per_state,
         activations=["linear", "softplus"],
-        init_values=[init_mean, init_std],
+        init_values=init_values,
         flatten_output=False,
     )
 
@@ -424,10 +441,18 @@ def test_predictive_state_params_initializer_state_specific_gaussian():
     )
 
     # Create layer (init_values doesn't matter since we'll overwrite weights)
+    # Use dummy init_values with shape (n_params_per_state, n_states)
+    dummy_init_values = np.array(
+        [
+            [0.0] * n_states,  # Row 0: means
+            [1.0] * n_states,  # Row 1: stds
+        ]
+    )
+
     layer = PredictiveStateParams(
         n_params_per_state=n_params_per_state,
         activations=activations,
-        init_values=[0.0, 1.0],  # Will be overwritten
+        init_values=dummy_init_values,  # Will be overwritten
         flatten_output=False,
     )
 

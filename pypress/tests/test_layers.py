@@ -222,7 +222,13 @@ class TestPredictiveStateParams:
 
         # Custom initialization - values on original scale
         # With linear activation, these become the logits directly
-        custom_values = [1.0, 2.0]  # One value per parameter
+        # Create 2D array with shape (n_params_per_state, n_states)
+        custom_values = np.array(
+            [
+                [1.0, 1.0],  # Row 0: param 0 for both states
+                [2.0, 2.0],  # Row 1: param 1 for both states
+            ]
+        )
 
         layer = layers.PredictiveStateParams(
             n_params_per_state=n_params,
