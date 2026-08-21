@@ -10,21 +10,25 @@ Core PRESS layers for building models:
 
 - **`PredictiveStateSimplex`**: Maps input features X to predictive state probabilities P(S|X) via softmax
 - **`PredictiveStateMeans`**: Computes weighted mixture of state-conditional means: Σ P(S_j|X) · μ_j
-- **`PredictiveStateParams`**: Learns state-conditional parameters (e.g., distribution params) independent of features
+- **`PredictiveStateParams`**: Learns state-conditional parameters (e.g., distribution params)
+  independent of features
 - **`PRESS`**: Convenience wrapper combining simplex and means layers
 
 ### `initializers.py`
 
 Custom initializers for PRESS layers:
 
-- **`PredictiveStateMeansInitializer`**: Initialize state-conditional means from observed data on original scale (automatically converts to logits using inverse activations)
-- **`PredictiveStateParamsInitializer`**: Initialize state-conditional parameters with different activations per parameter (e.g., Gaussian [mean, std] with ['linear', 'softplus'])
+- **`PredictiveStateMeansInitializer`**: Initialize state-conditional means from observed data on
+  original scale (automatically converts to logits using inverse activations)
+- **`PredictiveStateParamsInitializer`**: Initialize state-conditional parameters with different
+  activations per parameter (e.g., Gaussian [mean, std] with ['linear', 'softplus'])
 
 ### `activations.py`
 
 Activation inverse functions for initialization:
 
-- **`get_inverse_activation()`**: Returns inverse of activation functions for converting original scale values to logits
+- **`get_inverse_activation()`**: Returns inverse of activation functions for converting original
+  scale values to logits
 - **`ACTIVATION_INVERSES`**: Registry of supported activation inverses:
   - `linear` (identity)
   - `sigmoid` (logit)
