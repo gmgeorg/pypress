@@ -4,6 +4,8 @@ from typing import Callable
 
 import tensorflow as tf
 
+from .. import utils
+
 
 ACTIVATION_INVERSES = {
     "linear": lambda x: x,
@@ -11,7 +13,7 @@ ACTIVATION_INVERSES = {
     # numerically stable: for x > 20 softplus is essentially linear
     "softplus": lambda x: tf.where(x > 20.0, x, tf.math.log(tf.math.expm1(x))),
     "tanh": lambda x: tf.math.atanh(x),
-    "exponential": lambda x: tf.math.log(x + 1e-10),
+    "exponential": lambda x: utils.safe_log(x),
     # Leaky ReLU: Inverse is x/alpha for negative values
     # Assuming default alpha=0.2; adjust as needed
     "leaky_relu": lambda x, alpha=0.2: tf.where(x >= 0, x, x / alpha),
@@ -19,9 +21,9 @@ ACTIVATION_INVERSES = {
     "elu": lambda x, alpha=1.0: tf.where(x >= 0, x, tf.math.log(x / alpha + 1.0)),
     # Softsign: x / (1 + |x|) -> inverse is x / (1 - |x|)
     "softsign": lambda x: x / (1.0 - tf.math.abs(x)),
-    # Softmax: No unique inverse, but log(y) provides the logits
-    # shifted by a constant (Log-Softmax identity)
-    "softmax": lambda x: tf.math.log(x + 1e-10),
+    # Softmax has no unique inverse (shift-invariant), but log(y) recovers the
+    # logits up to that additive constant (Log-Softmax identity).
+    "softmax": lambda x: utils.safe_log(x),
     "selu": lambda x, alpha=1.67326, scale=1.0507: tf.where(
         x >= 0, x / scale, tf.math.log(x / (scale * alpha) + 1.0)
     ),
@@ -47,8 +49,10 @@ def get_inverse_activation(activation: str) -> Callable:
         Callable that computes the inverse activation function.
 
     Raises:
-        ValueError: If activation is not recognized or has no unique inverse.
-            Activations without inverses include "relu" and "softmax".
+        ValueError: If activation is not recognized, e.g. "relu" (not
+            invertible). "softmax" is shift-invariant rather than uniquely
+            invertible, but log(x) still recovers usable logits and is
+            supported.
 
     Example:
         >>> # Convert probability to logit
@@ -68,6 +72,9 @@ def get_inverse_activation(activation: str) -> Callable:
 
     inverse_fn = ACTIVATION_INVERSES[activation]
     if inverse_fn is None:
+        # Unreachable given the current dict (every entry is a real callable),
+        # kept as a guard in case a future activation is added with a None
+        # placeholder to mark it as deliberately non-invertible.
         raise ValueError(
             f"Activation '{activation}' has no unique inverse. "
             f"Cannot automatically convert from original scale. "

@@ -15,6 +15,29 @@ ActivationSpec = Union[
 ]
 
 
+def _init_values_to_config(
+    init_values: Optional[Union[float, np.ndarray]],
+) -> Optional[Union[float, list]]:
+    """Converts `init_values` to a JSON-safe form for `get_config()`.
+
+    A bare `np.ndarray` isn't JSON-serializable; Keras's `.keras` save format
+    mangles it into a `TrackedDict` on load, breaking the `isinstance(...,
+    np.ndarray)` checks in `initializers.py`. Convert to a list instead,
+    paired with `_init_values_from_config` on the receiving end. `None` and
+    scalars are already JSON-safe and pass through unchanged.
+    """
+    return init_values.tolist() if isinstance(init_values, np.ndarray) else init_values
+
+
+def _init_values_from_config(
+    init_values: Optional[Union[float, list]],
+) -> Optional[Union[float, np.ndarray]]:
+    """Inverse of `_init_values_to_config`."""
+    return (
+        np.array(init_values) if isinstance(init_values, (list, tuple)) else init_values
+    )
+
+
 @tf.keras.utils.register_keras_serializable(package="pypress")
 class PredictiveStateSimplex(tf.keras.layers.Dense):
     """Layer that implements the predictive state simplex for PRESS model.
@@ -53,6 +76,18 @@ class PredictiveStateSimplex(tf.keras.layers.Dense):
             bias_initializer=self._bias_initializer,
             **kwargs,
         )
+
+    def get_config(self) -> Dict[str, Any]:
+        """Returns the configuration of the layer for serialization.
+
+        Overrides `Dense.get_config()`, which emits `units`/`activation` --
+        `__init__` doesn't accept those; it hardcodes `n_states`/"softmax" instead.
+        """
+        config = super().get_config()
+        config.pop("units", None)
+        config.pop("activation", None)
+        config["n_states"] = self._n_states
+        return config
 
 
 @tf.keras.utils.register_keras_serializable(package="pypress")
@@ -123,7 +158,7 @@ class PredictiveStateMeans(tf.keras.layers.Layer):
         super().__init__(**kwargs)
         self._units = units
         self._activation = activation
-        self._init_values = init_values
+        self._init_values = _init_values_from_config(init_values)
 
         self._activation_layer = (
             tf.keras.layers.Activation(self._activation)
@@ -225,7 +260,7 @@ class PredictiveStateMeans(tf.keras.layers.Layer):
             {
                 "units": self._units,
                 "activation": self._activation,
-                "init_values": self._init_values,
+                "init_values": _init_values_to_config(self._init_values),
             }
         )
         return config
@@ -294,7 +329,7 @@ class PRESS(tf.keras.layers.Layer):
     @property
     def state_conditional_means(self) -> tf.Tensor:
         """Gets the state-conditional means."""
-        return self._prediction_state_means.state_conditional_means
+        return self._predictive_state_means.state_conditional_means
 
     def call(self, inputs: tf.Tensor) -> tf.Tensor:
         """Calls the layer to produce outputs."""
@@ -411,7 +446,7 @@ class PredictiveStateParams(tf.keras.layers.Layer):
         self._n_params_per_state = int(n_params_per_state)
         self._activations = activations
         self._flatten_output = bool(flatten_output)
-        self._init_values = init_values
+        self._init_values = _init_values_from_config(init_values)
 
         # Build activation layers now (no weights needed)
         self._activation_layers = self._make_activation_layers(
@@ -597,7 +632,7 @@ class PredictiveStateParams(tf.keras.layers.Layer):
                 n_params_per_state=self._n_params_per_state,
                 activations=self._activations,
                 flatten_output=self._flatten_output,
-                init_values=self._init_values,
+                init_values=_init_values_to_config(self._init_values),
             )
         )
         return config
