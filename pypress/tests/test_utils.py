@@ -284,3 +284,87 @@ def test_initialize_from_y_with_layer():
 
     # State means should match the initialized values
     np.testing.assert_allclose(means.numpy(), expected_values, atol=1.0)
+
+
+# -------- Tests for safe_log --------
+
+
+def test_safe_log_matches_log_for_positive_values():
+    """For p > 0, safe_log should exactly match tf.math.log."""
+    p = tf.constant([0.001, 0.1, 0.5, 1.0], dtype=tf.float32)
+    np.testing.assert_allclose(
+        utils.safe_log(p).numpy(), tf.math.log(p).numpy(), atol=1e-6
+    )
+
+
+def test_safe_log_zero_uses_neg_inf_floor():
+    """Exact zeros are floored at neg_inf instead of producing -inf/NaN."""
+    p = tf.constant([0.0, 0.5], dtype=tf.float32)
+    result = utils.safe_log(p).numpy()
+    assert result[0] == -1e9
+    np.testing.assert_allclose(result[1], np.log(0.5), atol=1e-6)
+
+
+def test_safe_log_custom_neg_inf():
+    """A custom neg_inf value is used for exact zeros."""
+    p = tf.constant([0.0], dtype=tf.float32)
+    result = utils.safe_log(p, neg_inf=-42.0).numpy()
+    np.testing.assert_allclose(result, [-42.0], atol=1e-6)
+
+
+def test_safe_log_gradient_finite_at_zero():
+    """Gradient at p == 0 must be finite (0), not NaN, unlike log(p) directly."""
+    p = tf.Variable([0.0, 0.5], dtype=tf.float32)
+    with tf.GradientTape() as tape:
+        y = utils.safe_log(p)
+    grad = tape.gradient(y, p).numpy()
+    assert np.all(np.isfinite(grad))
+    np.testing.assert_allclose(grad[0], 0.0, atol=1e-6)
+    np.testing.assert_allclose(grad[1], 1.0 / 0.5, atol=1e-4)
+
+
+def test_safe_log_preserves_shape_and_dtype():
+    """safe_log preserves the input tensor's shape and dtype."""
+    p = tf.constant([[0.2, 0.0], [0.5, 0.3]], dtype=tf.float64)
+    result = utils.safe_log(p)
+    assert result.shape == p.shape
+    assert result.dtype == p.dtype
+
+
+# -------- Tests for safe_xlogx --------
+
+
+def test_safe_xlogx_matches_xlogx_for_positive_values():
+    """For x > 0, safe_xlogx should exactly match x * log(x)."""
+    x = tf.constant([0.001, 0.1, 0.5, 1.0], dtype=tf.float32)
+    expected = (x * tf.math.log(x)).numpy()
+    np.testing.assert_allclose(utils.safe_xlogx(x).numpy(), expected, atol=1e-6)
+
+
+def test_safe_xlogx_zero_is_zero():
+    """x*log(x) -> 0 as x -> 0; safe_xlogx should return exactly 0 at x == 0."""
+    x = tf.constant([0.0, 0.5], dtype=tf.float32)
+    result = utils.safe_xlogx(x).numpy()
+    assert result[0] == 0.0
+    np.testing.assert_allclose(result[1], 0.5 * np.log(0.5), atol=1e-6)
+
+
+def test_safe_xlogx_gradient_bounded_at_zero():
+    """Gradient at x == 0 must be finite and small, unlike x*safe_log(x) which
+    reintroduces safe_log's large neg_inf floor via the product rule."""
+    x = tf.Variable([0.0, 0.5], dtype=tf.float32)
+    with tf.GradientTape() as tape:
+        y = utils.safe_xlogx(x)
+    grad = tape.gradient(y, x).numpy()
+    assert np.all(np.isfinite(grad))
+    # Should be nowhere near safe_log's -1e9 floor leaking through the product rule.
+    assert abs(grad[0]) < 100.0
+    np.testing.assert_allclose(grad[1], np.log(0.5) + 1.0, atol=1e-4)
+
+
+def test_safe_xlogx_preserves_shape_and_dtype():
+    """safe_xlogx preserves the input tensor's shape and dtype."""
+    x = tf.constant([[0.2, 0.0], [0.5, 0.3]], dtype=tf.float64)
+    result = utils.safe_xlogx(x)
+    assert result.shape == x.shape
+    assert result.dtype == x.dtype

@@ -5,38 +5,85 @@ import warnings
 
 from .. import utils
 
-_EPS = 1e-6
+
+@tf.keras.utils.register_keras_serializable(package="pypress")
+class TargetEntropy(tf.keras.regularizers.Regularizer):
+    """Penalizes weights if mean entropy deviates from a specific target value.
+
+    By default, targets log(0.5 * K), representing a balanced 50% regime overlap
+    anchor (where K = x.shape[1] at call time). Uses a squared (L2) penalty to
+    provide smooth gradient behavior near equilibrium.
+
+    Target = log(K) is maximum overlap (uniform distribution).
+    Target = 0 is minimum overlap (deterministic / single-state assignment).
+    """
+
+    # Fraction of K used as the dynamic default target active states.
+    _entropy_fraction = 0.5
+
+    def __init__(self, l2: float = 0.0, *, target: float | None = None, **kwargs):
+        """Initializes the regularizer.
+
+        Args:
+          l2: Penalty multiplier weight for the squared deviation from target.
+          target: Target mean entropy value. If None, defaults to
+            `log(0.5 * K)`, with K = x.shape[1] computed dynamically at call time.
+          **kwargs: Additional keyword arguments for Keras regularizers.
+        """
+        super().__init__(**kwargs)
+        self._l2 = l2
+        self._target = target
+
+    def _target_value(self, x):
+        """Computes or retrieves the target entropy value for input tensor 'x'."""
+        if self._target is not None:
+            return self._target
+
+        K = tf.cast(x.shape[1], dtype=tf.float32)
+        # Clamped at 1.0 active state so log(...) is non-negative for K >= 1
+        active_states = tf.maximum(1.0, self._entropy_fraction * K)
+        return tf.math.log(active_states)
+
+    def __call__(self, x):
+        """Computes squared penalty for deviation of mean entropy from target."""
+        entropy_per_row = -1.0 * tf.math.reduce_sum(utils.safe_xlogx(x), axis=1)
+        mean_entropy = tf.math.reduce_mean(entropy_per_row)
+
+        # Squared deviation (L2 penalty) for smooth optimizer updates
+        deviation = self._target_value(x) - mean_entropy
+        return self._l2 * tf.math.square(deviation)
+
+    def get_config(self):
+        """Returns the serializable config dictionary for Keras."""
+        config = {"l2": float(self._l2)}
+        if self._target is not None:
+            config["target"] = float(self._target)
+        return config
 
 
 @tf.keras.utils.register_keras_serializable(package="pypress")
-class Uniform(tf.keras.regularizers.Regularizer):
+class Uniform(TargetEntropy):
     """Penalizes weights if they are not uniform across columns (1 / J).
 
-    Does this by computing Shannon Entropy across each row and taking difference
-    to maximum possible entropy for uniform weights (log(# of columns))
+    Special case of TargetEntropy where the target is fixed to the maximum
+    possible entropy for uniform weights, log(# of columns), always computed
+    dynamically from the input. For a custom target, use TargetEntropy directly.
     """
 
-    def __init__(self, l1: float = 0.0, **kwargs):
+    _entropy_fraction = 1.0
+
+    def __init__(self, l2: float = 0.0, **kwargs):
         """Initializes the uniform regularizer.
 
         Args:
-          l1: penalty term.
+          l2: penalty multiplier weight for the squared deviation from target.
           **kwargs: addl keyword arguments to regularizers.
         """
-        super().__init__(**kwargs)
-        self._l1 = l1
-
-    def __call__(self, x):
-        """Computes l1 penalty given weight weights 'x'."""
-        entropy_per_row = -1 * tf.math.reduce_sum(x * tf.math.log(x + _EPS), axis=1)
-        return self._l1 * (
-            tf.math.log(tf.cast(x.shape[1], dtype=tf.float32))
-            - tf.math.reduce_mean(entropy_per_row)
-        )
+        super().__init__(l2=l2, target=None, **kwargs)
 
     def get_config(self):
         """Gets the config."""
-        return {"l1": float(self._l1)}
+        return {"l2": float(self._l2)}
 
 
 @tf.keras.utils.register_keras_serializable(package="pypress")
@@ -88,7 +135,7 @@ class DegreesOfFreedom(tf.keras.regularizers.Regularizer):
 
     def get_config(self):
         """Gets the config."""
-        return {"l1": float(self._l1), "target": float(self._target)}
+        return {"l1": float(self._l1), "target": float(self._target), "df": None}
 
 
 @tf.keras.utils.register_keras_serializable(package="pypress")
@@ -100,20 +147,32 @@ class UniformAndDegreesOfFreedomRegularizer(tf.keras.regularizers.Regularizer):
          from a target degrees of freedom)
 
     Keyword arguments:
-      uniform_l1: float, penalty weight for the Uniform regularizer.
+      uniform_l2: float, penalty weight for the Uniform regularizer (squared deviation).
       dof_l1: float, penalty weight for the DegreesOfFreedom regularizer.
       dof_target: float, target value for the degrees of freedom.
     """
 
     def __init__(
-        self, uniform_l1: float = 0.0, dof_l1: float = 0.0, dof_target: float = 1.0
+        self,
+        uniform_l2: float = 0.0,
+        dof_l1: float = 0.0,
+        dof_target: float = 1.0,
+        target_entropy: float = None,
+        **kwargs,
     ):
         """Initializes the class."""
-        self.uniform_l1 = uniform_l1
+        super().__init__(**kwargs)
+        self.uniform_l2 = uniform_l2
         self.dof_l1 = dof_l1
         self.dof_target = dof_target
-        # Explicitly instantiate the two internal regularizers:
-        self._uniform = Uniform(l1=self.uniform_l1)
+        self.target_entropy = target_entropy
+        # Explicitly instantiate the two internal regularizers. Uniform's target is
+        # fixed to log(# of columns); a custom target_entropy requires TargetEntropy.
+        self._uniform = (
+            TargetEntropy(l2=self.uniform_l2, target=target_entropy)
+            if target_entropy is not None
+            else Uniform(l2=self.uniform_l2)
+        )
         self._dof = DegreesOfFreedom(l1=self.dof_l1, target=self.dof_target)
 
     def __call__(self, x):
@@ -122,11 +181,14 @@ class UniformAndDegreesOfFreedomRegularizer(tf.keras.regularizers.Regularizer):
 
     def get_config(self):
         """Gets the config."""
-        return {
-            "uniform_l1": self.uniform_l1,
-            "dof_l1": self.dof_l1,
-            "dof_target": self.dof_target,
+        config = {
+            "uniform_l2": float(self.uniform_l2),
+            "dof_l1": float(self.dof_l1),
+            "dof_target": float(self.dof_target),
         }
+        if self.target_entropy is not None:
+            config["target_entropy"] = float(self.target_entropy)
+        return config
 
 
 @tf.keras.utils.register_keras_serializable(package="pypress")
@@ -167,7 +229,7 @@ class CombinedRegularizer(tf.keras.regularizers.Regularizer):
     @classmethod
     def from_config(cls, config):
         """
-        Recreates the CompositeRegularizer from its configuration.
+        Recreates the CombinedRegularizer from its configuration.
 
         The config is expected to have a key "regularizer_tuples" containing a list of
         tuples of (constructor name, kwargs). We assume that the corresponding constructors
@@ -175,10 +237,7 @@ class CombinedRegularizer(tf.keras.regularizers.Regularizer):
         """
         # Get the list of tuples from the config.
         regularizer_tuples = config.pop("regularizer_tuples")
-        # In this simple example, we assume that the constructor names in the tuples match
-        # the actual classes accessible from the pypress.keras.regularizers module.
-        # For a more robust implementation, you might use a registry.
-        # Here we import the module and look up the constructors by name.
+        # Import the module and look up the constructors by name.
         import pypress.keras.regularizers as regs
 
         new_tuples = []
