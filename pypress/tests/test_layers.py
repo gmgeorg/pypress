@@ -44,6 +44,31 @@ def test_predictive_state_means(n_states, units):
     assert preds.shape[1] == units
 
 
+def test_predictive_state_means_init_values_array_model_save_load_round_trip(tmp_path):
+    """Array-valued init_values must survive a full .keras save/load cycle.
+
+    JSON-serializing a bare np.ndarray in get_config() comes back as a
+    TrackedDict on load, breaking the isinstance(init_values, np.ndarray)
+    check in initializers.py -- see _init_values_to_config/
+    _init_values_from_config in layers.py.
+    """
+    layer = layers.PredictiveStateMeans(
+        units=1, activation="linear", init_values=np.array([2.0])
+    )
+    model = tf.keras.Sequential([layer])
+    model.build((None, 3))
+
+    inputs = tf.ones((5, 3))
+    outputs1 = model(inputs)
+
+    save_path = tmp_path / "means_model.keras"
+    model.save(save_path)
+    loaded_model = tf.keras.models.load_model(save_path)
+    outputs2 = loaded_model(inputs)
+
+    np.testing.assert_allclose(outputs1.numpy(), outputs2.numpy(), rtol=1e-5)
+
+
 def test_use_in_model_works():
     feats, y = _test_data(n_samples=1000)
 
@@ -77,6 +102,37 @@ def test_press_in_model_works():
     print(cor_mat)
 
     assert cor_mat[0, 1] > 0.88
+
+
+def test_press_state_conditional_means():
+    """PRESS.state_conditional_means delegates to the built sub-layer's property."""
+    press = layers.PRESS(units=1, n_states=3)
+    press(tf.random.normal((5, 4)))
+
+    means = press.state_conditional_means
+    assert means.shape == (3, 1)
+    np.testing.assert_allclose(
+        means.numpy(), press._predictive_state_means.state_conditional_means.numpy()
+    )
+
+
+def test_predictive_state_simplex_get_config_round_trip():
+    """get_config()/from_config() must round-trip since __init__ only takes n_states."""
+    simplex = layers.PredictiveStateSimplex(n_states=4)
+    inputs = tf.random.normal((5, 3))
+    outputs1 = simplex(inputs)
+
+    config = simplex.get_config()
+    assert "n_states" in config
+    assert "units" not in config
+    assert "activation" not in config
+
+    reconstructed = layers.PredictiveStateSimplex.from_config(config)
+    reconstructed.build(inputs.shape)
+    reconstructed.set_weights(simplex.get_weights())
+
+    outputs2 = reconstructed(inputs)
+    np.testing.assert_allclose(outputs1.numpy(), outputs2.numpy(), rtol=1e-5)
 
 
 class TestPredictiveStateParams:
@@ -245,6 +301,36 @@ class TestPredictiveStateParams:
             [[1.0, 2.0], [1.0, 2.0]], dtype=np.float32
         )  # (n_states, n_params)
         np.testing.assert_allclose(outputs[0].numpy(), expected, rtol=1e-5)
+
+    def test_init_values_array_model_save_load_round_trip(self, tmp_path):
+        """Array-valued init_values must survive a full .keras save/load cycle.
+
+        JSON-serializing a bare np.ndarray in get_config() comes back as a
+        TrackedDict on load, breaking the initializer downstream -- see
+        _init_values_to_config/_init_values_from_config in layers.py.
+        """
+        n_states = 2
+        n_params = 2
+        custom_values = np.array([[1.0, 1.0], [2.0, 2.0]])
+
+        layer = layers.PredictiveStateParams(
+            n_params_per_state=n_params,
+            activations="linear",
+            init_values=custom_values,
+            flatten_output=False,
+        )
+        model = tf.keras.Sequential([layer])
+        model.build((None, n_states))
+
+        inputs = tf.ones((1, n_states))
+        outputs1 = model(inputs)
+
+        save_path = tmp_path / "params_model.keras"
+        model.save(save_path)
+        loaded_model = tf.keras.models.load_model(save_path)
+        outputs2 = loaded_model(inputs)
+
+        np.testing.assert_allclose(outputs1.numpy(), outputs2.numpy(), rtol=1e-5)
 
     def test_compute_output_shape(self):
         """Test compute_output_shape method."""
