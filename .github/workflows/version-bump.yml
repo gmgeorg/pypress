@@ -1,0 +1,96 @@
+name: Version Bump
+
+# Auto-bumps the [project].version in pyproject.toml on open PRs, if the PR
+# branch's version isn't already ahead of its base branch's version.
+#
+# Bump type defaults to "patch". Add a "semver:minor" or "semver:major" label
+# to the PR to bump that part instead.
+#
+# Safe against loops: once bumped, the PR branch's version is ahead of base,
+# so the next run (triggered by this workflow's own push) is a no-op.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: write
+
+jobs:
+  bump-version:
+    # Skip forked PRs: the default token can't push to a fork's branch.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+
+      - name: Determine bump type from PR labels
+        id: bump_type
+        env:
+          LABELS_JSON: ${{ toJson(github.event.pull_request.labels.*.name) }}
+        run: |
+          if echo "$LABELS_JSON" | grep -q "semver:major"; then
+            echo "type=major" >> "$GITHUB_OUTPUT"
+          elif echo "$LABELS_JSON" | grep -q "semver:minor"; then
+            echo "type=minor" >> "$GITHUB_OUTPUT"
+          else
+            echo "type=patch" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check versions and bump if needed
+        id: bump
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          BUMP_TYPE: ${{ steps.bump_type.outputs.type }}
+        run: |
+          set -euo pipefail
+
+          get_version() {
+            grep -m1 '^version = ' "$1" | sed -E 's/version = "(.*)"/\1/'
+          }
+
+          git fetch origin "$BASE_REF" --depth=1
+          base_version=$(git show "origin/$BASE_REF:pyproject.toml" | grep -m1 '^version = ' | sed -E 's/version = "(.*)"/\1/')
+          current_version=$(get_version pyproject.toml)
+          echo "Base ($BASE_REF) version: $base_version; PR branch version: $current_version"
+
+          already_ahead=$(python3 -c "
+          def parse(v):
+              return tuple(int(x) for x in v.split('.')[:3])
+          print('true' if parse('$current_version') > parse('$base_version') else 'false')
+          ")
+
+          if [ "$already_ahead" = "true" ]; then
+            echo "PR branch version already ahead of $BASE_REF; nothing to do."
+            echo "bumped=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          new_version=$(python3 -c "
+          def bump(v, part):
+              major, minor, patch = (int(x) for x in v.split('.')[:3])
+              if part == 'major':
+                  return f'{major + 1}.0.0'
+              if part == 'minor':
+                  return f'{major}.{minor + 1}.0'
+              return f'{major}.{minor}.{patch + 1}'
+          print(bump('$current_version', '$BUMP_TYPE'))
+          ")
+
+          sed -i -E "s/^version = \".*\"/version = \"$new_version\"/" pyproject.toml
+          echo "Bumped $current_version -> $new_version ($BUMP_TYPE)"
+          echo "bumped=true" >> "$GITHUB_OUTPUT"
+          echo "new_version=$new_version" >> "$GITHUB_OUTPUT"
+
+      - name: Commit and push version bump
+        if: steps.bump.outputs.bumped == 'true'
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "chore: bump version to ${{ steps.bump.outputs.new_version }}"
+          file_pattern: pyproject.toml
+          commit_user_name: github-actions[bot]
+          commit_user_email: 41898282+github-actions[bot]@users.noreply.github.com
