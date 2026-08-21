@@ -1,53 +1,29 @@
 # Claude Context: pypress
 
-## Project Overview
-Predictive State Smoothing (PRESS) - A semi-nonparametric ML algorithm implemented in TensorFlow/Keras for high-dimensional regression and classification with variable selection.
+Predictive State Smoothing (PRESS): a semi-nonparametric ML algorithm implemented in
+`tf.keras` for high-dimensional regression/classification with variable selection.
+See [README.md](README.md) for the algorithm background, papers, and usage examples.
 
-## Key Architecture
+## Structure
 
-- **Core Layers**: `PredictiveStateSimplex` and `PredictiveStateMeans` (or combined `PRESS()` wrapper)
-
-- **Regularizers**: `Uniform` and `DegreesOfFreedom` for controlling state distributions
-
-- **Custom Initializers**: `PredictiveStateMeansInitializer` for proper weight initialization
-
-## Project Structure
-```
+```text
 pypress/
-├── pypress/
-│   ├── __init__.py          # Exports __version__
-│   ├── _version.py          # Dynamic version from pyproject.toml
-│   ├── utils.py             # State operations, kernel functions
-│   ├── keras/
-│   │   ├── layers.py        # Core PRESS layers
-│   │   ├── regularizers.py  # Uniform, DegreesOfFreedom, Combined
-│   │   └── initializers.py  # Custom weight initialization
-│   └── tests/               # 29 tests (all passing)
-├── pyproject.toml           # Single source of truth for version
-└── poetry.lock
+├── clustering.py           # Clustering utilities for predictive states
+├── utils.py                 # State operations, kernel functions
+├── keras/
+│   ├── layers.py            # PredictiveStateSimplex, PredictiveStateMeans, PRESS
+│   ├── regularizers.py      # Uniform, DegreesOfFreedom
+│   ├── initializers.py      # PredictiveStateMeansInitializer
+│   └── activations.py
+└── tests/
 ```
 
-## Dependencies
-- **TensorFlow**: `>=2.11.0,<3.0.0`
-- **NumPy**: `>=2.0.0`
-- **Pandas**: `>=1.5.0`
-- **Dev**: pytest `^9.0.2`
+## Development
 
-## Development Commands
 ```bash
-# Install dependencies
 poetry install
-
-# Run tests (29 tests, all passing)
 poetry run pytest pypress/tests/ -v
+poetry run ruff check --fix . && poetry run ruff format .
 ```
 
-## Important Notes
-- PRESS decomposes p(y|X) into predictive states: p(y|X) = Σ p(y|s_j) · p(s_j|X)
-- Conditional independence: y ⊥ X | s_j (outputs independent of features given state)
-- Predictive states are minimal sufficient statistics for y
-- Similar to Mixture Density Networks but with conditional independence structure
-
-## Papers
-- Goerg (2018): Classification using PRESS
-- Goerg (2017): Scalable non-parametric regression with PRESS
+Pre-commit hooks (ruff, markdownlint-cli2, codespell, interrogate) run on commit/push — see `.pre-commit-config.yaml`.
