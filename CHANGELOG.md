@@ -5,6 +5,28 @@ All notable changes `pypress` will be documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## pypress v0.2.4 - Aug 27, 2026
+
+### Fixed
+
+* `TargetEntropy`/`Uniform` entropy penalty was not scale-invariant in `K` (the
+  number of states/columns): the squared deviation from target entropy had a
+  dynamic range that grew as `log(K)^2`, so the effective regularization
+  strength silently depended on `K`. The `(target - mean_entropy)` deviation
+  is now normalized by `log(K)` (the maximum possible entropy) before
+  squaring, keeping the penalty bounded in `[0, l2]` regardless of `K`. This
+  changes penalty magnitudes for existing `l2` values tuned under the old
+  formula — retune if you rely on absolute penalty scale
+
+### Changed
+
+* `DegreesOfFreedom` penalty changed from L1 (`l1 * |target - df(kernel)|`) to
+  squared L2 (`l2 * (target - df(kernel)) ** 2`) for smoother gradients near
+  the target and consistency with `TargetEntropy`/`Uniform`. The
+  constructor/config parameter was renamed from `l1` to `l2` to reflect this.
+  `UniformAndDegreesOfFreedomRegularizer`'s `dof_l1` parameter was renamed to
+  `dof_l2` to match
+
 ## pypress v0.2.2 - Aug 21, 2026
 
 ### Changed
