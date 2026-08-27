@@ -16,6 +16,14 @@ class TargetEntropy(tf.keras.regularizers.Regularizer):
 
     Target = log(K) is maximum overlap (uniform distribution).
     Target = 0 is minimum overlap (deterministic / single-state assignment).
+
+    The deviation (target - mean entropy) is normalized by log(K), the maximum
+    possible entropy for K columns, before squaring. Without this, the penalty's
+    dynamic range grows as log(K)^2 while the (unrelated) mixture negative
+    log-likelihood's does not, so the effective regularization strength would
+    silently depend on the number of states K. Normalizing keeps the penalty
+    bounded in [0, l2] regardless of K, so `l2` means the same thing across
+    different values of K.
     """
 
     # Fraction of K used as the dynamic default target active states.
@@ -44,14 +52,26 @@ class TargetEntropy(tf.keras.regularizers.Regularizer):
         active_states = tf.maximum(1.0, self._entropy_fraction * K)
         return tf.math.log(active_states)
 
+    def _max_entropy(self, x):
+        """Computes log(K), the maximum possible entropy for K = x.shape[1] columns."""
+        K = tf.cast(x.shape[1], dtype=tf.float32)
+        return tf.math.log(tf.maximum(K, 1.0))
+
     def __call__(self, x):
-        """Computes squared penalty for deviation of mean entropy from target."""
+        """Computes squared penalty for deviation of mean entropy from target.
+
+        The deviation is normalized by log(K) so the penalty is scale-invariant
+        with respect to K = x.shape[1], keeping it bounded in [0, l2].
+        """
         entropy_per_row = -1.0 * tf.math.reduce_sum(utils.safe_xlogx(x), axis=1)
         mean_entropy = tf.math.reduce_mean(entropy_per_row)
 
-        # Squared deviation (L2 penalty) for smooth optimizer updates
+        # Squared, K-normalized deviation (L2 penalty) for smooth optimizer updates
         deviation = self._target_value(x) - mean_entropy
-        return self._l2 * tf.math.square(deviation)
+        # max_entropy is 0 only when K == 1, in which case deviation is also 0
+        # (both entropy and its clamped target are 0); guard against 0/0.
+        normalized_deviation = deviation / tf.maximum(self._max_entropy(x), 1e-8)
+        return self._l2 * tf.math.square(normalized_deviation)
 
     def get_config(self):
         """Returns the serializable config dictionary for Keras."""
@@ -110,12 +130,12 @@ class DegreesOfFreedom(tf.keras.regularizers.Regularizer):
     """
 
     def __init__(
-        self, l1: float = 0.0, target: float = 1.0, df: float = None, **kwargs
+        self, l2: float = 0.0, target: float = 1.0, df: float = None, **kwargs
     ):
         """Initializes the regularizer.
 
         Args:
-          l1: l1 penalty parameter for l1 * |df - df(kernel)|
+          l2: l2 penalty parameter for l2 * (df - df(kernel)) ** 2
           target: degrees of freedom parameter target value. Must be >= 1.
         """
         assert target >= 1.0, (
@@ -127,15 +147,15 @@ class DegreesOfFreedom(tf.keras.regularizers.Regularizer):
 
         super().__init__(**kwargs)
         self._target = target
-        self._l1 = l1
+        self._l2 = l2
 
     def __call__(self, x):
-        """Computes penalty based on L1 deviation from target degrees of freedom."""
-        return self._l1 * tf.abs(utils.tr_kernel(x) - self._target)
+        """Computes squared penalty for deviation from target degrees of freedom."""
+        return self._l2 * tf.square(utils.tr_kernel(x) - self._target)
 
     def get_config(self):
         """Gets the config."""
-        return {"l1": float(self._l1), "target": float(self._target), "df": None}
+        return {"l2": float(self._l2), "target": float(self._target), "df": None}
 
 
 @tf.keras.utils.register_keras_serializable(package="pypress")
@@ -148,14 +168,14 @@ class UniformAndDegreesOfFreedomRegularizer(tf.keras.regularizers.Regularizer):
 
     Keyword arguments:
       uniform_l2: float, penalty weight for the Uniform regularizer (squared deviation).
-      dof_l1: float, penalty weight for the DegreesOfFreedom regularizer.
+      dof_l2: float, penalty weight for the DegreesOfFreedom regularizer.
       dof_target: float, target value for the degrees of freedom.
     """
 
     def __init__(
         self,
         uniform_l2: float = 0.0,
-        dof_l1: float = 0.0,
+        dof_l2: float = 0.0,
         dof_target: float = 1.0,
         target_entropy: float = None,
         **kwargs,
@@ -163,7 +183,7 @@ class UniformAndDegreesOfFreedomRegularizer(tf.keras.regularizers.Regularizer):
         """Initializes the class."""
         super().__init__(**kwargs)
         self.uniform_l2 = uniform_l2
-        self.dof_l1 = dof_l1
+        self.dof_l2 = dof_l2
         self.dof_target = dof_target
         self.target_entropy = target_entropy
         # Explicitly instantiate the two internal regularizers. Uniform's target is
@@ -173,7 +193,7 @@ class UniformAndDegreesOfFreedomRegularizer(tf.keras.regularizers.Regularizer):
             if target_entropy is not None
             else Uniform(l2=self.uniform_l2)
         )
-        self._dof = DegreesOfFreedom(l1=self.dof_l1, target=self.dof_target)
+        self._dof = DegreesOfFreedom(l2=self.dof_l2, target=self.dof_target)
 
     def __call__(self, x):
         # Apply both regularizers and return their sum.
@@ -183,7 +203,7 @@ class UniformAndDegreesOfFreedomRegularizer(tf.keras.regularizers.Regularizer):
         """Gets the config."""
         config = {
             "uniform_l2": float(self.uniform_l2),
-            "dof_l1": float(self.dof_l1),
+            "dof_l2": float(self.dof_l2),
             "dof_target": float(self.dof_target),
         }
         if self.target_entropy is not None:
