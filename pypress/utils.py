@@ -77,11 +77,31 @@ def kernel_matrix(
         return kernel
 
 
+def tr_kernel_terms(weights: tf.Tensor) -> Tuple[tf.Tensor, tf.Tensor]:
+    """Computes the per-state numerator and denominator of the kernel trace.
+
+    The trace of the PRESS kernel decomposes over states as
+
+        trace(K) = sum_j (sum_i w_ij^2) / (sum_i w_ij),
+
+    so the numerator is the per-state sum of squared weights and the denominator
+    is the state size. Returning them separately lets callers average each across
+    batches before taking the ratio, which is what a ratio estimator needs to be
+    well behaved on small batches.
+
+    Args:
+        weights: Weight tensor of shape (n_samples, n_states).
+
+    Returns:
+        Tuple of (numerator, denominator), each of shape (n_states,).
+    """
+    return tf.reduce_sum(tf.square(weights), axis=0), tf_state_size(weights)
+
+
 def tr_kernel(weights: tf.Tensor) -> tf.Tensor:
     """Computes trace of kernel matrix implied by PRESS tensor."""
-    return tf.reduce_sum(
-        tf.linalg.diag_part(tf.matmul(tf.transpose(tf_col_normalize(weights)), weights))
-    )
+    numerator, denominator = tr_kernel_terms(weights)
+    return tf.reduce_sum(numerator / denominator)
 
 
 def agg_data_by_state(

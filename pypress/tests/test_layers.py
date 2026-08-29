@@ -1,5 +1,6 @@
 """Tests for layers."""
 
+import json
 from typing import Tuple
 
 import numpy as np
@@ -7,7 +8,7 @@ import pandas as pd
 import pytest
 import tensorflow as tf
 
-from ..keras import layers
+from ..keras import layers, regularizers
 
 
 def _test_data(n_samples: int) -> Tuple[pd.DataFrame, pd.Series]:
@@ -586,3 +587,104 @@ def test_predictive_state_means_multiclass_classification():
     accuracy = np.mean(predicted_classes == y_labels)
     # With random data, we just check it doesn't crash and produces valid outputs
     assert 0.0 <= accuracy <= 1.0
+
+
+# -------- PRESS sub-layer construction / serialization --------
+
+
+def test_press_sublayers_exist_before_build():
+    """Sub-layers must be tracked from construction, not created in build().
+
+    Anything that inspects a model before the first call -- `summary()`, a
+    scheduler callback looking for regularizers -- only sees sub-layers that were
+    constructed in `__init__`.
+    """
+    press = layers.PRESS(units=1, n_states=5)
+    assert not press.built
+    assert isinstance(press.predictive_state_simplex, layers.PredictiveStateSimplex)
+    assert isinstance(press.predictive_state_means, layers.PredictiveStateMeans)
+    assert press.predictive_state_simplex in press._layers
+    assert press.predictive_state_means in press._layers
+
+
+def test_press_build_creates_weights_and_is_idempotent():
+    """build() builds both sub-layers; rebuilding is a no-op that keeps weights.
+
+    Creating sub-layers inside build() (the previous behavior) meant a second
+    build silently replaced them, discarding trained weights.
+    """
+    press = layers.PRESS(units=2, n_states=4)
+    press.build((None, 6))
+
+    assert press.built
+    simplex, means = press.predictive_state_simplex, press.predictive_state_means
+    assert simplex.built and means.built
+    assert means.state_conditional_means.shape == (4, 2)
+    weights_before = [w.numpy().copy() for w in press.weights]
+    assert weights_before
+
+    press.build((None, 6))
+    assert press.predictive_state_simplex is simplex
+    assert press.predictive_state_means is means
+    for before, after in zip(weights_before, press.weights):
+        np.testing.assert_allclose(before, after.numpy())
+
+
+def test_press_compute_output_shape():
+    """Output shape is (..., units)."""
+    press = layers.PRESS(units=3, n_states=5)
+    assert tuple(press.compute_output_shape((None, 7))) == (None, 3)
+
+
+def test_press_get_config_serializes_nested_keras_objects():
+    """A regularizer in the sub-layer kwargs must survive get_config/from_config.
+
+    Raw Keras objects in a config are not JSON-serializable, so a model carrying
+    one could not be saved at all.
+    """
+    press = layers.PRESS(
+        units=1,
+        n_states=5,
+        predictive_state_simplex_kwargs={
+            "activity_regularizer": regularizers.MinStateSize(l2=0.3, min_share=0.05)
+        },
+    )
+    config = press.get_config()
+    serialized = config["predictive_state_simplex_kwargs"]["activity_regularizer"]
+    assert isinstance(serialized, dict)
+    json.dumps(config)  # must not raise
+
+    restored = layers.PRESS.from_config(config)
+    restored_reg = restored.predictive_state_simplex.activity_regularizer
+    assert isinstance(restored_reg, regularizers.MinStateSize)
+    assert restored_reg.get_config() == {"l2": 0.3, "min_share": 0.05}
+
+
+def test_press_model_save_and_reload_round_trip(tmp_path):
+    """End-to-end: a PRESS model with a regularizer saves and reloads."""
+    feats, y = _test_data(n_samples=200)
+    model = tf.keras.Sequential(
+        [
+            tf.keras.layers.Input(shape=(feats.shape[1],)),
+            layers.PRESS(
+                units=1,
+                n_states=4,
+                predictive_state_simplex_kwargs={
+                    "activity_regularizer": regularizers.MinStateSize(
+                        l2=0.1, min_share=0.05
+                    )
+                },
+            ),
+        ]
+    )
+    model.compile(loss="mse", optimizer="adam")
+    model.fit(feats, y, epochs=1, verbose=0)
+    expected = model.predict(feats, verbose=0)
+
+    path = tmp_path / "press.keras"
+    model.save(path)
+    reloaded = tf.keras.models.load_model(path)
+
+    np.testing.assert_allclose(reloaded.predict(feats, verbose=0), expected, atol=1e-5)
+    reg = reloaded.layers[0].predictive_state_simplex.activity_regularizer
+    assert isinstance(reg, regularizers.MinStateSize)

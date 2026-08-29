@@ -266,6 +266,26 @@ class PredictiveStateMeans(tf.keras.layers.Layer):
         return config
 
 
+def _serialize_kwargs(kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    """Serializes sub-layer kwargs that may hold Keras objects.
+
+    Values such as a regularizer or initializer are live objects and are not
+    JSON-serializable, so a config carrying them raw cannot be saved.
+    """
+    return {
+        key: tf.keras.utils.serialize_keras_object(value)
+        for key, value in kwargs.items()
+    }
+
+
+def _deserialize_kwargs(kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    """Inverse of `_serialize_kwargs`."""
+    return {
+        key: tf.keras.utils.deserialize_keras_object(value)
+        for key, value in kwargs.items()
+    }
+
+
 @tf.keras.utils.register_keras_serializable(package="pypress")
 class PRESS(tf.keras.layers.Layer):
     """Implements mixture distribution of features -> predictive state simplex -> outputs.
@@ -311,8 +331,12 @@ class PRESS(tf.keras.layers.Layer):
         self._predictive_state_simplex_kwargs = predictive_state_simplex_kwargs or {}
         self._predictive_state_means_kwargs = predictive_state_means_kwargs or {}
 
-    def build(self, input_shape):
-        """Builds the layer based on input_shape."""
+        # Sub-layers are constructed here rather than in build(). Keras then tracks
+        # them from construction, so they appear in `.layers`, and their weights,
+        # losses and regularizers are reachable before the first call -- which
+        # anything inspecting the model (a scheduler callback, `summary()`) needs.
+        # It also makes build() idempotent: creating them there would silently
+        # replace trained sub-layers if the layer were ever rebuilt.
         self._predictive_state_simplex = PredictiveStateSimplex(
             n_states=self._n_states, **self._predictive_state_simplex_kwargs
         )
@@ -321,6 +345,34 @@ class PRESS(tf.keras.layers.Layer):
             activation=self._activation,
             **self._predictive_state_means_kwargs,
         )
+
+    @property
+    def predictive_state_simplex(self) -> "PredictiveStateSimplex":
+        """The sub-layer mapping features to predictive state probabilities."""
+        return self._predictive_state_simplex
+
+    @property
+    def predictive_state_means(self) -> "PredictiveStateMeans":
+        """The sub-layer holding the state-conditional means."""
+        return self._predictive_state_means
+
+    def build(self, input_shape):
+        """Builds both sub-layers so their weights exist before the first call.
+
+        Building an already-built sub-layer is skipped rather than repeated: Keras
+        locks a built layer against new state, and re-running the build would in
+        any case discard weights that have already been trained.
+        """
+        if not self._predictive_state_simplex.built:
+            self._predictive_state_simplex.build(input_shape)
+        if not self._predictive_state_means.built:
+            states_shape = tuple(input_shape[:-1]) + (self._n_states,)
+            self._predictive_state_means.build(states_shape)
+        super().build(input_shape)
+
+    def compute_output_shape(self, input_shape):
+        """Computes the output shape, (..., units)."""
+        return tuple(input_shape[:-1]) + (self._units,)
 
     def predictive_states(self, inputs: tf.Tensor) -> tf.Tensor:
         """Predictive states of input."""
@@ -344,11 +396,24 @@ class PRESS(tf.keras.layers.Layer):
                 "units": self._units,
                 "n_states": self._n_states,
                 "activation": self._activation,
-                "predictive_state_means_kwargs": self._predictive_state_means_kwargs,
-                "predictive_state_simplex_kwargs": self._predictive_state_simplex_kwargs,
+                "predictive_state_means_kwargs": _serialize_kwargs(
+                    self._predictive_state_means_kwargs
+                ),
+                "predictive_state_simplex_kwargs": _serialize_kwargs(
+                    self._predictive_state_simplex_kwargs
+                ),
             }
         )
         return config
+
+    @classmethod
+    def from_config(cls, config: Dict[str, Any]) -> "PRESS":
+        """Recreates the layer, rebuilding nested Keras objects in the kwargs."""
+        config = dict(config)
+        for key in ("predictive_state_means_kwargs", "predictive_state_simplex_kwargs"):
+            if config.get(key):
+                config[key] = _deserialize_kwargs(config[key])
+        return cls(**config)
 
 
 @tf.keras.utils.register_keras_serializable(package="pypress")

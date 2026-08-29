@@ -45,9 +45,30 @@ Activation inverse functions for initialization:
 
 Regularizers for controlling predictive state distributions:
 
-- **`Uniform`**: Encourages uniform state distribution across samples
-- **`DegreesOfFreedom`**: Controls effective number of states (penalizes non-uniform state usage)
+- **`TargetEntropy`**: Penalizes deviation of the *mean row entropy* from a target, i.e. how
+  sharp each sample's state assignment is
+- **`Uniform`**: Special case of `TargetEntropy` targeting uniform weights across states within
+  each row
+- **`StateSizeEntropy`**: Penalizes states carrying ~0 weight across the whole population, via
+  the normalized KL divergence of the state-size marginal from uniform usage. Catches
+  over-provisioned `K` (many dead states), which `Uniform` and `DegreesOfFreedom` are both blind to
+- **`MinStateSize`**: Enforces a per-state floor on population share ("at least 5% of
+  observations per state"). Exact where `StateSizeEntropy` is only a proxy; use it when state
+  sizes are legitimately unequal but none may vanish
+- **`DegreesOfFreedom`**: Penalizes deviation of the implied kernel trace (the *effective* number
+  of states) from a target
 - **`Combined`**: Combines multiple regularizers with different strengths
+
+### `schedules.py`
+
+- **`ScheduledValue`**: A regularizer scalar (`l2`, or `DegreesOfFreedom`'s `target`) that
+  varies with the training epoch. Backed by a `tf.Variable`, so updates survive `tf.function`
+  tracing -- mutating a plain Python attribute mid-training is silently ignored
+
+### `callbacks.py`
+
+- **`RegularizerScheduler`**: Advances every `ScheduledValue` in a model's regularizers at the
+  start of each epoch. Without it attached to `fit`, scheduled values stay at `start`
 
 ## Usage Examples
 
