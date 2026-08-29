@@ -5,6 +5,68 @@ All notable changes `pypress` will be documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## pypress v0.3.0 - Aug 29, 2026
+
+### Added
+
+* `StateSizeEntropy` regularizer: penalizes predictive states carrying ~0 weight
+  across the population, via the normalized KL divergence of the state-size
+  marginal from uniform usage. Catches over-provisioned `K`, which `Uniform` and
+  `DegreesOfFreedom` are both blind to — a `K = 50` model with 45 dead states has
+  the same kernel trace and mean row entropy as an honest `K = 5` model
+* `MinStateSize` regularizer: a per-state floor in population units ("at least 5%
+  of observations per state"). Exact where `StateSizeEntropy` is only a proxy —
+  one scalar cannot encode `K` separate floors — and independent of `K`.
+  Infeasible floors (`min_share * K > 1`) raise instead of training against an
+  impossible target
+* `ema_decay` on every regularizer: evaluates the penalty on bias-corrected
+  moving averages of its summary statistics instead of single-minibatch
+  estimates, which are biased upward because the penalties are convex. More
+  batches per epoch does not remove that bias; a larger batch or this does.
+  Gradients still flow through the current batch
+* `pypress.keras.schedules.ScheduledValue` and
+  `pypress.keras.callbacks.RegularizerScheduler`: anneal any regularizer scalar
+  over epochs rather than enforcing it from epoch 0. Values are `tf.Variable`
+  backed, since mutating a plain Python attribute mid-training is captured at
+  trace time and silently ignored. A `ScheduledValue` initializes to `end`, so
+  omitting the callback costs the annealing, not the regularization
+
+### Changed
+
+* `TargetEntropy` gained `entropy_fraction`, expressing the target as a fraction
+  of `K` (`log(entropy_fraction * K)`) rather than in absolute nats, so it need
+  not be recomputed when `n_states` changes. Mutually exclusive with `target`
+* `PRESS` constructs its `PredictiveStateSimplex` / `PredictiveStateMeans`
+  sub-layers in `__init__` rather than `build()`, so Keras tracks them from
+  construction and they are reachable before the first call. Rebuilding is now a
+  no-op rather than silently replacing trained sub-layers. Added
+  `predictive_state_simplex` / `predictive_state_means` properties and
+  `compute_output_shape`
+* `utils.tr_kernel_terms` exposes the kernel trace's per-state numerator and
+  denominator, so each can be averaged across batches before taking the ratio.
+  `utils.tr_kernel` is unchanged and now built on it
+
+### Fixed
+
+* `PRESS.get_config` emitted live Keras objects for the nested sub-layer kwargs,
+  so a model carrying a regularizer or initializer could not be saved at all.
+  Now serialized properly, with a matching `from_config`
+
+### Documentation
+
+* README gained a `## Regularizers` section: what each regularizer controls,
+  what each sees at initialization, how to choose `l2`, which knobs to schedule
+  and in which direction, and batch-size / `ema_decay` guidance
+
+### Note on tuning
+
+At initialization the simplex weights are uniform, so `trace(K)` is exactly 1
+regardless of `n_states` and grows only as states differentiate. A
+`DegreesOfFreedom` target below `n_states` therefore caps differentiation from
+the first step rather than pruning states later. Warming up its `l2` from 0 is
+usually preferable. `StateSizeEntropy` and `MinStateSize` are exactly zero at
+initialization and need no warm-up.
+
 ## pypress v0.2.4 - Aug 27, 2026
 
 ### Fixed

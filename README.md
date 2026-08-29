@@ -79,6 +79,105 @@ Non-trainable params: 0
 See also the [`notebook/demo.ipynb`](notebooks/demo.ipynb) for end to end examples for PRESS
 regression and classification models.
 
+## Regularizers
+
+PRESS regularizers attach as the `activity_regularizer` of `PredictiveStateSimplex`, so they
+see the batch of state probabilities `W` (rows sum to 1) and penalize summary statistics of it.
+Each one controls a different thing, and knowing what each sees at initialization is what makes
+them tunable:
+
+| Regularizer | Controls | Value at init (uniform weights) |
+| --- | --- | --- |
+| `TargetEntropy` / `Uniform` | How sharp each *row* is — one observation's state assignment | mean row entropy `= log(K)`, the maximum |
+| `StateSizeEntropy` | Whether state usage is spread across all states, population-wide | penalty `= 0` |
+| `MinStateSize` | A per-state floor: "at least x% of observations per state" | penalty `= 0` |
+| `DegreesOfFreedom` | Effective number of states, via the kernel trace | `trace(K) = 1`, **not** `n_states` |
+
+Three consequences worth internalizing:
+
+* **`trace(K)` starts at 1 and grows.** At initialization every row is identical, so the kernel
+  is rank one no matter how many states you asked for. A `DegreesOfFreedom` target below
+  `n_states` therefore *caps differentiation from the first step* rather than pruning states
+  later. If you want a small model, reduce `n_states`; use `DegreesOfFreedom` to prune once
+  states mean something.
+* **`StateSizeEntropy` and `MinStateSize` are free at initialization.** They start satisfied and
+  only bite once mass is actually lost, so they act as guards and need no warm-up.
+* **`Uniform` and `DegreesOfFreedom` cannot see a dead state.** A `K = 50` model with 45 states
+  at ~0 population weight has the same kernel trace and mean row entropy as an honest `K = 5`
+  model. That is what `StateSizeEntropy` / `MinStateSize` are for.
+
+### Recommended setup
+
+```python
+from pypress.keras import callbacks, layers, regularizers, schedules
+
+n_states = 9
+epochs = 40
+
+reg = regularizers.CombinedRegularizer([
+    # Guard: no state may hold less than 5% of the population.
+    # Zero at init, so full strength from epoch 0 -- it only bites if mass is lost.
+    (regularizers.MinStateSize,
+     {"l2": 5.0, "min_share": 0.05, "ema_decay": 0.95}),
+
+    # Complexity: let states differentiate first, then prune toward 4 effective states.
+    # Warmed up from 0, because trace(K) starts at 1 and must be allowed to grow.
+    (regularizers.DegreesOfFreedom,
+     {"l2": schedules.ScheduledValue(start=0.0, end=2.0, duration_epochs=epochs // 2),
+      "target": 4.0, "ema_decay": 0.95}),
+])
+
+model = tf.keras.Sequential([
+    tf.keras.layers.Input(shape=(X.shape[1],)),
+    layers.PRESS(units=1, n_states=n_states,
+                 predictive_state_simplex_kwargs={"activity_regularizer": reg}),
+])
+model.compile(loss="mse", optimizer=tf.keras.optimizers.Nadam(learning_rate=0.01))
+model.fit(X, y, epochs=epochs, batch_size=256,
+          callbacks=[callbacks.RegularizerScheduler()])   # required for the schedule
+```
+
+### Choosing `l2`
+
+Every penalty here is bounded in `[0, l2]` and scale-invariant in `K`, so **`l2` is the
+worst-case cost of total violation** and is directly comparable to your loss. Pick it as a
+meaningful fraction of the loss you actually see: with a standardized target (MSE ~ 1 at init),
+`l2` of roughly 1-5 makes `MinStateSize` bind, while `l2 = 0.05` leaves it decorative. Because
+of the `K`-normalization, a value tuned at one `n_states` carries over to another.
+
+### Which knobs to schedule, and in which direction
+
+Direction is expressed by the endpoints — `start < end` warms up, `start > end` decays — and it
+differs per regularizer, so do **not** ramp them all together.
+
+| Regularizer | Schedule | Why |
+| --- | --- | --- |
+| `DegreesOfFreedom` | `l2`: `0 -> target strength` | `trace(K)` starts at 1; let it grow on the fit signal, then prune |
+| `DegreesOfFreedom` | `target`: `n_states -> desired` (alternative) | More aggressive: forces differentiation first, then prunes gradually |
+| `TargetEntropy` | `entropy_fraction`: `1.0 -> desired` | Row entropy starts at `log(K)`, i.e. fraction 1.0 — starts the constraint where the model already is |
+| `MinStateSize` | none (constant `l2`) | Already satisfied at init; it is the counterweight during the fragile early epochs |
+| `StateSizeEntropy` | none (constant `l2`) | Same |
+
+Any scalar accepts a `ScheduledValue` (`l2`, `target`, `entropy_fraction`, `active_fraction`,
+`min_share`), with `linear`, `cosine` or `exponential` interpolation.
+
+`RegularizerScheduler` must be passed to `fit` for a schedule to advance. If you forget it, a
+`ScheduledValue` stays at its `end` value, so you get the fully enforced penalty with no
+annealing — never a silently disabled regularizer.
+
+### Batch size and `ema_decay`
+
+The state-size marginal and the kernel trace are estimated from a single minibatch, and every
+penalty is convex in them, so each batch estimate is biased *upward*. Running more batches per
+epoch does not remove that bias — only a larger batch, or `ema_decay`, does. With a population
+that exactly meets a 5% floor (true penalty 0), the mean `MinStateSize` penalty at
+`batch_size=32` is 0.052 whether averaged over 200 or 5000 batches, and a compliant state is
+flagged in ~82% of batches; the effective floor is then well above the one you asked for.
+
+Either keep `batch_size * min_share` at roughly 10 or more (so `batch_size >= 200` for a 5%
+floor), or set `ema_decay` (0.9-0.99), which smooths the statistics across batches while
+gradients still flow through the current batch.
+
 ## PRESS in a nutshell
 
 The figure below, adapted from **Goerg (2018)**, contrasts the architecture of a standard
