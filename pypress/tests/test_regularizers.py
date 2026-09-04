@@ -179,6 +179,29 @@ def test_degrees_of_freedom_regularizer_nonzero_penalty():
     np.testing.assert_allclose(penalty.numpy(), 1.0, atol=1e-6)
 
 
+def test_normalized_degrees_of_freedom_is_scale_invariant_with_k():
+    """Equal fractional trace errors cost equally with absolute DoF targets."""
+    penalties = []
+    for n_states, n_alive, target in ((10, 3, 5.0), (20, 6, 10.0)):
+        x = _hard_assignment_weights(n_states=n_states, n_alive=n_alive)
+        penalties.append(
+            DegreesOfFreedom(l2=1.0, target=target, normalize=True)(x).numpy()
+        )
+
+    # (3 - 5) / 10 == (6 - 10) / 20 == -0.2.
+    np.testing.assert_allclose(penalties, [0.04, 0.04], atol=1e-5)
+
+
+def test_normalized_degrees_of_freedom_serializes():
+    """The normalization choice and an absolute scheduled target survive config."""
+    target = ScheduledValue(start=9.0, end=4.0, duration_epochs=3)
+    reg = DegreesOfFreedom(l2=0.2, target=target, normalize=True)
+    restored = DegreesOfFreedom.from_config(reg.get_config())
+    assert restored.normalize is True
+    assert isinstance(restored.target, ScheduledValue)
+    assert restored.target.get_config() == target.get_config()
+
+
 def test_combined_regularizer_tuples():
     # Create a dummy weight matrix.
     # For example, a 2 x 3 matrix where rows represent outputs/features.

@@ -139,11 +139,13 @@ model.fit(X, y, epochs=epochs, batch_size=256,
 
 ### Choosing `l2`
 
-Every penalty here is bounded in `[0, l2]` and scale-invariant in `K`, so **`l2` is the
-worst-case cost of total violation** and is directly comparable to your loss. Pick it as a
-meaningful fraction of the loss you actually see: with a standardized target (MSE ~ 1 at init),
-`l2` of roughly 1-5 makes `MinStateSize` bind, while `l2 = 0.05` leaves it decorative. Because
-of the `K`-normalization, a value tuned at one `n_states` carries over to another.
+The entropy and state-usage penalties are bounded in `[0, l2]` and scale-invariant in `K`, so
+their `l2` is the worst-case cost of total violation. `DegreesOfFreedom(target=...)` retains its
+natural absolute-count target: use `normalize=True` when the target error should be normalized by
+`n_states`, so an `l2` tuned for a fractional trace error transfers across architectures. Pick
+each weight as a meaningful fraction of the loss you actually see: with a standardized target
+(MSE ~ 1 at init), `l2` of roughly 1-5 makes a penalty bind, while `l2 = 0.05` leaves it
+decorative.
 
 ### Which knobs to schedule, and in which direction
 
@@ -154,6 +156,7 @@ differs per regularizer, so do **not** ramp them all together.
 | --- | --- | --- |
 | `DegreesOfFreedom` | `l2`: `0 -> target strength` | `trace(K)` starts at 1; let it grow on the fit signal, then prune |
 | `DegreesOfFreedom` | `target`: `n_states -> desired` (alternative) | More aggressive: forces differentiation first, then prunes gradually |
+| `DegreesOfFreedom` | `normalize=True` | Keep the target in effective-state units while normalizing its error by `n_states` |
 | `TargetEntropy` | `entropy_fraction`: `1.0 -> desired` | Row entropy starts at `log(K)`, i.e. fraction 1.0 — starts the constraint where the model already is |
 | `MinStateSize` | none (constant `l2`) | Already satisfied at init; it is the counterweight during the fragile early epochs |
 | `StateSizeEntropy` | none (constant `l2`) | Same |
