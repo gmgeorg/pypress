@@ -56,7 +56,7 @@ Regularizers for controlling predictive state distributions:
   observations per state"). Exact where `StateSizeEntropy` is only a proxy; use it when state
   sizes are legitimately unequal but none may vanish
 - **`DegreesOfFreedom`**: Penalizes deviation of the implied kernel trace (the *effective* number
-  of states) from a target
+  of states) from an absolute count target, optionally normalized by K
 - **`Combined`**: Combines multiple regularizers with different strengths
 
 ### `schedules.py`

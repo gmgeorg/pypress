@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+* `DegreesOfFreedom(normalize=True)`: an opt-in K-normalized penalty for the
+  kernel trace. It preserves the absolute effective-state `target` while
+  dividing its deviation by `n_states`, so an `l2` tuned for a fractional
+  effective-state deviation transfers across state counts
+
 * `StateSizeEntropy` regularizer: penalizes predictive states carrying ~0 weight
   across the population, via the normalized KL divergence of the state-size
   marginal from uniform usage. Catches over-provisioned `K`, which `Uniform` and

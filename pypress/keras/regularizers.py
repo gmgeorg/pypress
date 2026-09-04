@@ -567,6 +567,11 @@ class DegreesOfFreedom(_SmoothedRegularizer):
     the fit signal alone and starts pruning once the states mean something.
     Annealing `target` downward from roughly `n_states` is the more aggressive
     alternative, which actively forces differentiation before pruning.
+
+    `target` is always an absolute effective-state count. Set `normalize=True`
+    to divide its deviation by K = x.shape[1] before squaring, so an `l2` tuned
+    for a given fractional trace error transfers across different `n_states`.
+    This changes only penalty scale, never the target being optimized.
     """
 
     def __init__(
@@ -575,6 +580,7 @@ class DegreesOfFreedom(_SmoothedRegularizer):
         target: float = 1.0,
         df: float = None,
         *,
+        normalize: bool = False,
         ema_decay: float | None = None,
         **kwargs,
     ):
@@ -583,9 +589,12 @@ class DegreesOfFreedom(_SmoothedRegularizer):
         Args:
           l2: l2 penalty parameter for l2 * (df - df(kernel)) ** 2. May be a
             `ScheduledValue`.
-          target: degrees of freedom parameter target value. Must be >= 1. May be
-            a `ScheduledValue`.
+          target: Absolute degrees-of-freedom target. Must be >= 1. May be a
+            `ScheduledValue`.
           df: Deprecated alias for `target`.
+          normalize: Divide the target deviation by K = x.shape[1] before
+            squaring. This makes the penalty scale-invariant in K while retaining
+            `target` in its natural effective-state-count units.
           ema_decay: If set, average the kernel trace's per-state numerator and
             denominator across batches before taking their ratio. The trace is a
             ratio estimator, so it is biased on small batches even before the
@@ -609,6 +618,7 @@ class DegreesOfFreedom(_SmoothedRegularizer):
 
         super().__init__(l2=l2, ema_decay=ema_decay, **kwargs)
         self._target = target
+        self._normalize = normalize
 
     def __call__(self, x):
         """Computes squared penalty for deviation from target degrees of freedom."""
@@ -619,19 +629,31 @@ class DegreesOfFreedom(_SmoothedRegularizer):
             self._smooth("trace_numerator", numerator)
             / tf.maximum(self._smooth("trace_denominator", denominator), 1e-8)
         )
-        return schedules.as_tensor(self._l2) * tf.square(
-            trace - schedules.as_tensor(self._target)
-        )
+        deviation = trace - schedules.as_tensor(self._target)
+        if self._normalize:
+            # K, rather than batch size, is the stable architectural scale.
+            # The trace's lower bound is 1, so exact endpoint invariance is not
+            # possible for finite K; fractional deviations are comparable.
+            K = tf.cast(x.shape[1], dtype=trace.dtype)
+            deviation = deviation / tf.maximum(K, 1.0)
+        return schedules.as_tensor(self._l2) * tf.square(deviation)
 
     @property
     def target(self):
         """The degrees-of-freedom target, as configured (float or ScheduledValue)."""
         return self._target
 
+    @property
+    def normalize(self):
+        """Whether the target deviation is normalized by the number of states."""
+        return self._normalize
+
     def get_config(self):
         """Gets the config."""
         config = self._base_config()
         config["target"] = schedules.serialize_scalar(self._target)
+        if self._normalize:
+            config["normalize"] = self._normalize
         config["df"] = None
         return config
 
@@ -647,7 +669,8 @@ class UniformAndDegreesOfFreedomRegularizer(tf.keras.regularizers.Regularizer):
     Keyword arguments:
       uniform_l2: float, penalty weight for the Uniform regularizer (squared deviation).
       dof_l2: float, penalty weight for the DegreesOfFreedom regularizer.
-      dof_target: float, target value for the degrees of freedom.
+      dof_target: Absolute target value for the degrees of freedom.
+      dof_normalize: Normalize the DoF target deviation by K before squaring.
     """
 
     def __init__(
@@ -655,6 +678,7 @@ class UniformAndDegreesOfFreedomRegularizer(tf.keras.regularizers.Regularizer):
         uniform_l2: float = 0.0,
         dof_l2: float = 0.0,
         dof_target: float = 1.0,
+        dof_normalize: bool = False,
         target_entropy: float = None,
         **kwargs,
     ):
@@ -663,6 +687,7 @@ class UniformAndDegreesOfFreedomRegularizer(tf.keras.regularizers.Regularizer):
         self.uniform_l2 = uniform_l2
         self.dof_l2 = dof_l2
         self.dof_target = dof_target
+        self.dof_normalize = dof_normalize
         self.target_entropy = target_entropy
         # Explicitly instantiate the two internal regularizers. Uniform's target is
         # fixed to log(# of columns); a custom target_entropy requires TargetEntropy.
@@ -671,7 +696,11 @@ class UniformAndDegreesOfFreedomRegularizer(tf.keras.regularizers.Regularizer):
             if target_entropy is not None
             else Uniform(l2=self.uniform_l2)
         )
-        self._dof = DegreesOfFreedom(l2=self.dof_l2, target=self.dof_target)
+        self._dof = DegreesOfFreedom(
+            l2=self.dof_l2,
+            target=self.dof_target,
+            normalize=self.dof_normalize,
+        )
 
     def __call__(self, x):
         # Apply both regularizers and return their sum.
@@ -684,6 +713,8 @@ class UniformAndDegreesOfFreedomRegularizer(tf.keras.regularizers.Regularizer):
             "dof_l2": schedules.serialize_scalar(self.dof_l2),
             "dof_target": schedules.serialize_scalar(self.dof_target),
         }
+        if self.dof_normalize:
+            config["dof_normalize"] = self.dof_normalize
         if self.target_entropy is not None:
             config["target_entropy"] = schedules.serialize_scalar(self.target_entropy)
         return config
