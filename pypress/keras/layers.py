@@ -77,6 +77,17 @@ class PredictiveStateSimplex(tf.keras.layers.Dense):
             **kwargs,
         )
 
+    def build(self, input_shape):
+        """Builds the layer and any per-layer state of its activity regularizer.
+
+        A regularizer with cross-batch smoothing (`ema_decay`) keeps running
+        averages for this layer. They are created here and tracked as sub-layers,
+        so they appear in the layer's variables and are saved with the model.
+        """
+        bind = getattr(self.activity_regularizer, "bind", None)
+        self.regularizer_state = bind(self, self._n_states) if callable(bind) else []
+        super().build(input_shape)
+
     def get_config(self) -> Dict[str, Any]:
         """Returns the configuration of the layer for serialization.
 

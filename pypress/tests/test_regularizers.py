@@ -1,10 +1,12 @@
+import json
+
 import numpy as np
 import pytest
 import tensorflow as tf
 
 # Import the regularizers from your module.
 # Adjust the import path according to your package structure.
-from pypress.keras.schedules import ScheduledValue
+from pypress.keras.schedules import ScheduledValue, set_epoch
 from pypress.keras.regularizers import (
     DegreesOfFreedom,
     MinStateSize,
@@ -129,9 +131,15 @@ def test_target_entropy_clamps_active_states_at_one():
 
 
 def test_target_entropy_get_config():
-    """get_config omits 'target' when unset, includes it when set explicitly."""
-    assert TargetEntropy(l2=0.5).get_config() == {"l2": 0.5}
-    assert TargetEntropy(l2=0.5, target=0.3).get_config() == {"l2": 0.5, "target": 0.3}
+    """get_config emits every declared hyperparameter, None when unset."""
+    assert TargetEntropy(l2=0.5).get_config() == {
+        "l2": 0.5,
+        "target": None,
+        "entropy_fraction": None,
+        "ema_decay": None,
+    }
+    assert TargetEntropy(l2=0.5, target=0.3).get_config()["target"] == 0.3
+    assert Uniform(l2=0.5).get_config() == {"l2": 0.5, "ema_decay": None}
 
 
 # -------- Tests for the DegreesOfFreedom Regularizer --------
@@ -202,141 +210,88 @@ def test_normalized_degrees_of_freedom_serializes():
     assert restored.target.get_config() == target.get_config()
 
 
-def test_combined_regularizer_tuples():
-    # Create a dummy weight matrix.
-    # For example, a 2 x 3 matrix where rows represent outputs/features.
-    x = tf.constant([[0.1, 0.2, 0.7], [0.3, 0.3, 0.4]], dtype=tf.float32)
+_X3 = tf.constant([[0.1, 0.2, 0.7], [0.3, 0.3, 0.4]], dtype=tf.float32)
 
-    # Instantiate individual regularizers directly.
-    uniform_reg = Uniform(l2=0.01)
-    df_reg = DegreesOfFreedom(l2=0.02, df=1.0)
 
-    # Expected penalty: the sum of the individual penalties.
-    expected_penalty = uniform_reg(x) + df_reg(x)
-
-    # Create the combined regularizer using a list of tuples: (constructor, kwargs)
-    regularizer_tuples = [
-        (Uniform, {"l2": 0.01}),
-        (DegreesOfFreedom, {"l2": 0.02, "df": 1.0}),
-    ]
-    combined_reg = CombinedRegularizer(regularizer_tuples=regularizer_tuples)
-
-    # Compute the combined penalty.
-    combined_penalty = combined_reg(x)
-
-    # Assert that the combined penalty equals the sum of the individual penalties.
-    np.testing.assert_allclose(
-        combined_penalty.numpy(),
-        expected_penalty.numpy(),
-        atol=1e-6,
-        err_msg="CombinedRegularizer (tuples) does not match sum of individual regularizers.",
+def test_combined_regularizer_sums_instances():
+    """CombinedRegularizer of instances returns the sum of their penalties."""
+    combined = CombinedRegularizer(
+        [Uniform(l2=0.01), DegreesOfFreedom(l2=0.02, target=1.0)]
     )
+    expected = Uniform(l2=0.01)(_X3) + DegreesOfFreedom(l2=0.02, target=1.0)(_X3)
+    np.testing.assert_allclose(combined(_X3).numpy(), expected.numpy(), atol=1e-6)
 
 
-# def test_composite_regularizer_serialization():
-#     # Create a dummy weight tensor.
-#     # For example, a 2 x 3 matrix.
-#     x = tf.constant([[0.1, 0.2, 0.7],
-#                      [0.3, 0.3, 0.4]], dtype=tf.float32)
-
-#     # Define a list of tuples: (constructor, kwargs)
-#     regularizer_tuples = [
-#         (Uniform, {"l2": 0.01}),
-#         (DegreesOfFreedom, {"l2": 0.02, "df": 1.0})
-#     ]
-
-#     # Instantiate the CompositeRegularizer.
-#     composite_reg_orig = CombinedRegularizer(regularizer_tuples=regularizer_tuples)
-
-#     # Compute penalty from the original instance.
-#     orig_penalty = composite_reg_orig(x)
-
-#     # Serialize the composite regularizer (get config).
-#     config = composite_reg_orig.get_config()
-
-#     # Deserialize the composite regularizer.
-#     # Because we registered CompositeRegularizer with tf.keras.utils.register_keras_serializable,
-#     # we can use tf.keras.regularizers.deserialize().
-#     composite_reg_new = tf.keras.regularizers.deserialize(config)
-
-#     # Compute penalty from the deserialized instance.
-#     new_penalty = composite_reg_new(x)
-
-#     # Verify that both penalties are identical (within a small tolerance).
-#     np.testing.assert_allclose(
-#         new_penalty.numpy(), orig_penalty.numpy(), atol=1e-6,
-#         err_msg="Deserialized CompositeRegularizer does not match original instance."
-#     )
+def test_combined_regularizer_tuples_are_deprecated_but_work():
+    """The old (class, kwargs) tuple form still sums correctly, with a warning."""
+    with pytest.warns(DeprecationWarning, match="tuples"):
+        combined = CombinedRegularizer(
+            regularizer_tuples=[
+                (Uniform, {"l2": 0.01}),
+                (DegreesOfFreedom, {"l2": 0.02, "target": 1.0}),
+            ]
+        )
+    expected = Uniform(l2=0.01)(_X3) + DegreesOfFreedom(l2=0.02, target=1.0)(_X3)
+    np.testing.assert_allclose(combined(_X3).numpy(), expected.numpy(), atol=1e-6)
 
 
-def test_combined_regularizer_penalty():
-    """
-    Test that the combined regularizer returns the sum of the Uniform and
-    DegreesOfFreedom penalties.
-    """
-    # Create a dummy weight tensor (e.g., a 2x3 matrix)
-    x = tf.constant([[0.1, 0.2, 0.7], [0.3, 0.3, 0.4]], dtype=tf.float32)
-
-    # Instantiate our combined regularizer with explicit parameters.
-    combined_reg = UniformAndDegreesOfFreedomRegularizer(
-        uniform_l2=0.01, dof_l2=0.02, dof_target=1.0
+def test_combined_regularizer_keras_serialization_round_trip():
+    """A composite with a scheduled child survives JSON and Keras deserialization."""
+    combined = CombinedRegularizer(
+        [
+            Uniform(l2=0.01),
+            DegreesOfFreedom(
+                l2=ScheduledValue(start=0.0, end=0.5, duration_epochs=3), target=2.0
+            ),
+        ]
     )
-
-    # Also instantiate the two individual regularizers directly.
-    uniform_reg = Uniform(l2=0.01)
-    dof_reg = DegreesOfFreedom(l2=0.02, df=1.0)
-
-    # Compute expected penalty as the sum of the two individual penalties.
-    expected_penalty = uniform_reg(x) + dof_reg(x)
-    computed_penalty = combined_reg(x)
-
-    np.testing.assert_allclose(
-        computed_penalty.numpy(),
-        expected_penalty.numpy(),
-        atol=1e-6,
-        err_msg="Combined regularizer penalty does not equal the sum of the individual penalties.",
-    )
+    serialized = json.loads(json.dumps(tf.keras.regularizers.serialize(combined)))
+    restored = tf.keras.regularizers.deserialize(serialized)
+    assert isinstance(restored, CombinedRegularizer)
+    assert isinstance(restored.regularizers[1].l2, ScheduledValue)
+    np.testing.assert_allclose(restored(_X3).numpy(), combined(_X3).numpy(), atol=1e-6)
 
 
-def test_combined_regularizer_get_config():
-    """
-    Test that get_config returns the expected configuration dictionary.
-    """
-    uniform_l2 = 0.01
-    dof_l2 = 0.02
-    dof_target = 1.0
-    reg = UniformAndDegreesOfFreedomRegularizer(
-        uniform_l2=uniform_l2, dof_l2=dof_l2, dof_target=dof_target
-    )
+def test_combined_regularizer_loads_old_tuple_configs():
+    """Configs written by pypress <= 0.3 ([name, kwargs] pairs) still load."""
+    old_config = {
+        "regularizer_tuples": [
+            ["Uniform", {"l2": 0.01}],
+            ["DegreesOfFreedom", {"l2": 0.02, "target": 1.0, "df": None}],
+        ]
+    }
+    restored = CombinedRegularizer.from_config(old_config)
+    expected = Uniform(l2=0.01)(_X3) + DegreesOfFreedom(l2=0.02, target=1.0)(_X3)
+    np.testing.assert_allclose(restored(_X3).numpy(), expected.numpy(), atol=1e-6)
+
+
+def test_uniform_and_dof_regularizer_is_deprecated_but_equivalent():
+    """The fixed pair warns, sums its children, and round-trips its flat config."""
+    with pytest.warns(DeprecationWarning, match="CombinedRegularizer"):
+        reg = UniformAndDegreesOfFreedomRegularizer(
+            uniform_l2=0.01, dof_l2=0.02, dof_target=1.0
+        )
+    expected = Uniform(l2=0.01)(_X3) + DegreesOfFreedom(l2=0.02, target=1.0)(_X3)
+    np.testing.assert_allclose(reg(_X3).numpy(), expected.numpy(), atol=1e-6)
+
     config = reg.get_config()
-    # Check that the config returns the same values.
-    assert config["uniform_l2"] == uniform_l2
-    assert config["dof_l2"] == dof_l2
-    assert config["dof_target"] == dof_target
-
-
-def test_combined_regularizer_serialization_deserialization():
-    """
-    Test that serializing and then deserializing the regularizer yields an object
-    that produces the same penalty on a given tensor.
-    """
-    reg_orig = UniformAndDegreesOfFreedomRegularizer(
-        uniform_l2=0.01, dof_l2=0.02, dof_target=1.0
+    assert (config["uniform_l2"], config["dof_l2"], config["dof_target"]) == (
+        0.01,
+        0.02,
+        1.0,
     )
-    config = reg_orig.get_config()
-    # Deserialize using the class from_config method.
-    reg_new = UniformAndDegreesOfFreedomRegularizer.from_config(config)
+    with pytest.warns(DeprecationWarning):
+        restored = UniformAndDegreesOfFreedomRegularizer.from_config(config)
+    np.testing.assert_allclose(restored(_X3).numpy(), reg(_X3).numpy(), atol=1e-6)
 
-    # Create a dummy weight tensor.
-    x = tf.constant([[0.1, 0.2, 0.7], [0.3, 0.3, 0.4]], dtype=tf.float32)
 
-    # Both the original and deserialized regularizer should produce the same output.
-    np.testing.assert_allclose(
-        reg_new(x).numpy(),
-        reg_orig(x).numpy(),
-        atol=1e-6,
-        err_msg="Deserialized regularizer does not produce the same penalty as the original.",
-    )
+def test_uniform_and_dof_regularizer_attributes_are_values_after_from_config():
+    """A scheduled weight in an old config comes back as a ScheduledValue, not a dict."""
+    l2 = ScheduledValue(start=0.0, end=1.0, duration_epochs=2)
+    with pytest.warns(DeprecationWarning):
+        reg = UniformAndDegreesOfFreedomRegularizer(uniform_l2=l2, dof_l2=0.1)
+        restored = UniformAndDegreesOfFreedomRegularizer.from_config(reg.get_config())
+    assert isinstance(restored.uniform_l2, ScheduledValue)
 
 
 # -------- Tests for the StateSizeEntropy Regularizer --------
@@ -488,7 +443,7 @@ def test_state_size_entropy_get_config_roundtrip():
     """get_config/from_config round-trips and reproduces the penalty."""
     reg = StateSizeEntropy(l2=0.25, active_fraction=0.75)
     config = reg.get_config()
-    assert config == {"l2": 0.25, "active_fraction": 0.75}
+    assert config == {"l2": 0.25, "active_fraction": 0.75, "ema_decay": None}
 
     x = _hard_assignment_weights(n_states=8, n_alive=3)
     np.testing.assert_allclose(
@@ -498,12 +453,13 @@ def test_state_size_entropy_get_config_roundtrip():
 
 def test_state_size_entropy_in_combined_regularizer():
     """StateSizeEntropy composes with CombinedRegularizer and survives from_config."""
-    tuples = [
-        (Uniform, {"l2": 0.01}),
-        (DegreesOfFreedom, {"l2": 0.02, "target": 3.0}),
-        (StateSizeEntropy, {"l2": 0.05, "active_fraction": 0.5}),
-    ]
-    combined = CombinedRegularizer(regularizer_tuples=tuples)
+    combined = CombinedRegularizer(
+        [
+            Uniform(l2=0.01),
+            DegreesOfFreedom(l2=0.02, target=3.0),
+            StateSizeEntropy(l2=0.05, active_fraction=0.5),
+        ]
+    )
     x = _hard_assignment_weights(n_states=9, n_alive=3)
 
     expected = (
@@ -654,14 +610,18 @@ def test_min_state_size_handles_zero_columns_and_single_state():
 def test_min_state_size_get_config_roundtrip():
     """get_config/from_config round-trips, including the None default."""
     reg = MinStateSize(l2=0.25, min_share=0.05)
-    assert reg.get_config() == {"l2": 0.25, "min_share": 0.05}
+    assert reg.get_config() == {"l2": 0.25, "min_share": 0.05, "ema_decay": None}
     x = _hard_assignment_weights(n_states=8, n_alive=3)
     np.testing.assert_allclose(
         MinStateSize.from_config(reg.get_config())(x).numpy(), reg(x).numpy(), atol=1e-6
     )
 
     default_reg = MinStateSize(l2=0.25)
-    assert default_reg.get_config() == {"l2": 0.25, "min_share": None}
+    assert default_reg.get_config() == {
+        "l2": 0.25,
+        "min_share": None,
+        "ema_decay": None,
+    }
     np.testing.assert_allclose(
         MinStateSize.from_config(default_reg.get_config())(x).numpy(),
         default_reg(x).numpy(),
@@ -671,11 +631,9 @@ def test_min_state_size_get_config_roundtrip():
 
 def test_min_state_size_in_combined_regularizer():
     """MinStateSize composes with CombinedRegularizer and survives from_config."""
-    tuples = [
-        (Uniform, {"l2": 0.01}),
-        (MinStateSize, {"l2": 0.05, "min_share": 0.05}),
-    ]
-    combined = CombinedRegularizer(regularizer_tuples=tuples)
+    combined = CombinedRegularizer(
+        [Uniform(l2=0.01), MinStateSize(l2=0.05, min_share=0.05)]
+    )
     x = _hard_assignment_weights(n_states=9, n_alive=3)
 
     expected = Uniform(l2=0.01)(x) + MinStateSize(l2=0.05, min_share=0.05)(x)
@@ -705,7 +663,8 @@ def test_ema_defaults_to_off():
     x = _hard_assignment_weights(n_states=9, n_alive=4)
     plain = MinStateSize(l2=1.0, min_share=0.05)
     assert plain.ema_decay is None
-    assert "ema_decay" not in plain.get_config()
+    assert plain.get_config()["ema_decay"] is None
+    assert plain.smoothed_statistics() == {}
     np.testing.assert_allclose(
         plain(x).numpy(), MinStateSize(l2=1.0, min_share=0.05)(x).numpy(), atol=1e-7
     )
@@ -720,18 +679,20 @@ def test_ema_first_call_equals_the_batch_estimate():
 
 
 def test_ema_tracks_the_bias_corrected_average():
-    """The smoothed marginal matches an explicit bias-corrected EMA."""
+    """The smoothed state sizes match an explicit bias-corrected EMA."""
     decay = 0.8
     reg = MinStateSize(l2=1.0, min_share=0.05, ema_decay=decay)
     ema = np.zeros(9, dtype=np.float64)
     for step, batch in enumerate(_compliant_batches(6, 64), start=1):
         reg(batch)
         ema = decay * ema + (1.0 - decay) * batch.numpy().sum(axis=0)
-        smoother = reg._smoothers["state_sizes"]
         np.testing.assert_allclose(
-            smoother.average.numpy(), ema, atol=1e-4, err_msg=f"step {step}"
+            reg.smoothed_statistics()["state_sizes"].numpy(),
+            ema / (1.0 - decay**step),
+            rtol=1e-4,
+            err_msg=f"step {step}",
         )
-        np.testing.assert_allclose(float(smoother.step), step)
+        assert reg.smoothing_steps == step
 
 
 def test_ema_removes_most_of_the_minibatch_bias():
@@ -778,7 +739,7 @@ def test_ema_applies_to_state_size_entropy_too():
     assert reg.get_config()["ema_decay"] == 0.9
     for batch in _compliant_batches(3, 64):
         assert np.isfinite(float(reg(batch)))
-    assert float(reg._smoothers["state_sizes"].step) == 3.0
+    assert reg.smoothing_steps == 3
 
 
 def test_ema_decay_validated():
@@ -802,9 +763,9 @@ def test_scheduled_l2_is_read_at_call_time():
     assert baseline > 0.0
     np.testing.assert_allclose(reg(x).numpy(), baseline, rtol=1e-6)
 
-    l2.assign_epoch(0)
+    set_epoch(0)
     np.testing.assert_allclose(reg(x).numpy(), 0.0, atol=1e-7)
-    l2.assign_epoch(1)
+    set_epoch(1)
     np.testing.assert_allclose(reg(x).numpy(), baseline, rtol=1e-6)
 
 
@@ -816,15 +777,15 @@ def test_scheduled_degrees_of_freedom_target():
 
     # df is 3 here. Unscheduled the target sits at `end` (3), so no penalty.
     np.testing.assert_allclose(reg(x).numpy(), 0.0, atol=1e-4)
-    target.assign_epoch(0)
+    set_epoch(0)
     assert reg(x).numpy() > 30.0
-    target.assign_epoch(6)
+    set_epoch(6)
     np.testing.assert_allclose(reg(x).numpy(), 0.0, atol=1e-4)
 
 
 def test_scheduled_degrees_of_freedom_target_validated_over_whole_schedule():
     """A target dipping below 1 anywhere in the schedule is rejected."""
-    with pytest.raises(AssertionError, match="whole"):
+    with pytest.raises(ValueError, match="whole schedule"):
         DegreesOfFreedom(
             l2=1.0, target=ScheduledValue(start=9.0, end=0.5, duration_epochs=4)
         )
@@ -850,7 +811,8 @@ def test_ema_smooths_mean_row_entropy():
     reg = Uniform(l2=1.0, ema_decay=0.8)
     for batch in _compliant_batches(4, 64):
         assert np.isfinite(float(reg(batch)))
-    assert float(reg._smoothers["mean_row_entropy"].step) == 4.0
+    assert reg.smoothing_steps == 4
+    assert set(reg.smoothed_statistics()) == {"mean_row_entropy"}
     assert reg.get_config()["ema_decay"] == 0.8
 
 
@@ -863,8 +825,8 @@ def test_ema_smooths_the_trace_ratio_termwise():
     reg = DegreesOfFreedom(l2=1.0, target=3.0, ema_decay=0.9)
     for batch in _compliant_batches(3, 64):
         assert np.isfinite(float(reg(batch)))
-    assert set(reg._smoothers) == {"trace_numerator", "trace_denominator"}
-    assert float(reg._smoothers["trace_numerator"].step) == 3.0
+    assert set(reg.smoothed_statistics()) == {"trace_numerator", "trace_denominator"}
+    assert reg.smoothing_steps == 3
 
 
 def test_ema_reduces_trace_variance_on_small_batches():
@@ -912,10 +874,10 @@ def test_scheduled_entropy_fraction_starts_at_the_initialization():
     uniform = tf.constant(np.full((4, n_states), 1.0 / n_states, dtype=np.float32))
 
     # At epoch 0 the target is log(K), exactly the entropy of uniform weights.
-    fraction.assign_epoch(0)
+    set_epoch(0)
     np.testing.assert_allclose(reg(uniform).numpy(), 0.0, atol=1e-6)
     # Once tightened, the same uniform weights are penalized.
-    fraction.assign_epoch(4)
+    set_epoch(4)
     assert reg(uniform).numpy() > 0.0
 
 
@@ -934,5 +896,133 @@ def test_scheduled_active_fraction_round_trips():
     config = StateSizeEntropy(l2=0.1, active_fraction=fraction).get_config()
     assert isinstance(config["active_fraction"], dict)
     restored = StateSizeEntropy.from_config(config)
-    assert isinstance(restored._active_fraction, ScheduledValue)
-    assert restored._active_fraction.get_config() == fraction.get_config()
+    assert isinstance(restored.active_fraction, ScheduledValue)
+    assert restored.active_fraction.get_config() == fraction.get_config()
+
+
+# -------- Declared hyperparameters: one round-trip and validation matrix --------
+
+# (class, extra kwargs, scheduled hyperparameter, (start, end), value out of bounds)
+_HYPERPARAMETER_CASES = [
+    (Uniform, {}, "l2", (0.0, 1.0), -1.0),
+    (TargetEntropy, {}, "target", (0.5, 1.0), -0.5),
+    (TargetEntropy, {}, "entropy_fraction", (1.0, 0.5), 1.5),
+    (StateSizeEntropy, {}, "active_fraction", (1.0, 0.5), 0.0),
+    (MinStateSize, {}, "min_share", (0.01, 0.1), 1.5),
+    (DegreesOfFreedom, {"normalize": True}, "target", (5.0, 2.0), 0.5),
+]
+
+
+@pytest.mark.parametrize(
+    "cls, extra, name, endpoints, bad",
+    _HYPERPARAMETER_CASES,
+    ids=[f"{case[0].__name__}-{case[2]}" for case in _HYPERPARAMETER_CASES],
+)
+def test_every_hyperparameter_round_trips_and_validates(
+    cls, extra, name, endpoints, bad
+):
+    """Each schedulable setting survives JSON config and is validated with ValueError."""
+    schedule = ScheduledValue(start=endpoints[0], end=endpoints[1], duration_epochs=3)
+    kwargs = {"l2": 0.5, **extra, name: schedule}
+    reg = cls(**kwargs)
+    config = json.loads(json.dumps(reg.get_config()))
+    restored = cls.from_config(config)
+    assert restored.get_config() == reg.get_config()
+    x = _hard_assignment_weights(n_states=6, n_alive=3)
+    np.testing.assert_allclose(restored(x).numpy(), reg(x).numpy(), atol=1e-6)
+
+    with pytest.raises(ValueError, match=name):
+        cls(**{**extra, name: bad})
+    bad_schedule = ScheduledValue(start=schedule.start, end=bad, duration_epochs=3)
+    with pytest.raises(ValueError, match="whole schedule"):
+        cls(**{**extra, name: bad_schedule})
+
+
+def test_ema_decay_cannot_be_scheduled():
+    """ema_decay sizes the estimator, so it is a fixed setting."""
+    with pytest.raises(TypeError, match="ema_decay"):
+        MinStateSize(ema_decay=ScheduledValue(start=0.5, end=0.9, duration_epochs=2))
+
+
+def test_degrees_of_freedom_df_alias_is_deprecated():
+    """'df' still works as an alias for 'target', with a DeprecationWarning."""
+    with pytest.warns(DeprecationWarning, match="df"):
+        reg = DegreesOfFreedom(l2=1.0, df=3.0)
+    assert reg.target == 3.0
+
+
+# -------- Cross-batch estimator: training-only, per-layer, saved state --------
+
+
+def _simplex_model(regularizer, n_states=4, n_features=3):
+    """A one-layer model with 'regularizer' on the simplex activations."""
+    from pypress.keras.layers import PredictiveStateSimplex
+
+    return tf.keras.Sequential(
+        [
+            tf.keras.Input(shape=(n_features,)),
+            PredictiveStateSimplex(n_states, activity_regularizer=regularizer),
+        ]
+    )
+
+
+def _xy(n=64, n_features=3, n_states=4, seed=0):
+    """Random features and simplex-shaped targets."""
+    rng = np.random.default_rng(seed)
+    y = rng.dirichlet(np.ones(n_states), size=n).astype(np.float32)
+    return rng.standard_normal((n, n_features)).astype(np.float32), y
+
+
+def test_ema_only_advances_on_training_batches():
+    """evaluate and predict read the estimate without moving it."""
+    reg = MinStateSize(l2=1.0, ema_decay=0.9)
+    model = _simplex_model(reg)
+    model.compile(optimizer="adam", loss="mse")
+    X, y = _xy()
+    model.fit(X, y, epochs=1, batch_size=16, verbose=0)
+    assert reg.smoothing_steps == 4
+    model.evaluate(X, y, batch_size=16, verbose=0)
+    model.predict(X, batch_size=16, verbose=0)
+    assert reg.smoothing_steps == 4
+
+
+def test_ema_state_is_part_of_the_model_and_saved(tmp_path):
+    """The averages are model variables and survive save/load."""
+    reg = MinStateSize(l2=1.0, ema_decay=0.9)
+    model = _simplex_model(reg)
+    model.compile(optimizer="adam", loss="mse")
+    X, y = _xy()
+    model.fit(X, y, epochs=1, batch_size=16, verbose=0)
+    assert any("state_sizes_ema" in v.path for v in model.non_trainable_variables)
+
+    path = tmp_path / "model.keras"
+    model.save(path)
+    restored = tf.keras.models.load_model(path)
+    restored_reg = restored.layers[0].activity_regularizer
+    assert restored_reg.smoothing_steps == 4
+    np.testing.assert_allclose(
+        restored_reg.smoothed_statistics()["state_sizes"].numpy(),
+        reg.smoothed_statistics()["state_sizes"].numpy(),
+        rtol=1e-6,
+    )
+
+
+def test_a_smoothed_regularizer_cannot_be_shared_between_layers():
+    """Per-layer state means a second layer needs its own instance."""
+    from pypress.keras.layers import PredictiveStateSimplex
+
+    shared = MinStateSize(l2=1.0, ema_decay=0.9)
+    x = tf.ones((2, 3))
+    PredictiveStateSimplex(3, activity_regularizer=shared)(x)
+    with pytest.raises(ValueError, match="its own instance"):
+        PredictiveStateSimplex(5, activity_regularizer=shared)(x)
+
+
+def test_an_unsmoothed_regularizer_can_be_shared_between_layers():
+    """Without ema_decay there is no state, so sharing is fine."""
+    from pypress.keras.layers import PredictiveStateSimplex
+
+    shared = MinStateSize(l2=1.0)
+    x = tf.ones((2, 3))
+    PredictiveStateSimplex(3, activity_regularizer=shared)(x)
+    PredictiveStateSimplex(5, activity_regularizer=shared)(x)

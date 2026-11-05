@@ -117,14 +117,15 @@ epochs = 40
 reg = regularizers.CombinedRegularizer([
     # Guard: no state may hold less than 5% of the population.
     # Zero at init, so full strength from epoch 0 -- it only bites if mass is lost.
-    (regularizers.MinStateSize,
-     {"l2": 5.0, "min_share": 0.05, "ema_decay": 0.95}),
+    regularizers.MinStateSize(l2=5.0, min_share=0.05, ema_decay=0.95),
 
     # Complexity: let states differentiate first, then prune toward 4 effective states.
     # Warmed up from 0, because trace(H) starts at 1 and must be allowed to grow.
-    (regularizers.DegreesOfFreedom,
-     {"l2": schedules.ScheduledValue(start=0.0, end=2.0, duration_epochs=epochs // 2),
-      "target": 4.0, "ema_decay": 0.95}),
+    regularizers.DegreesOfFreedom(
+        l2=schedules.ScheduledValue(start=0.0, end=2.0, duration_epochs=epochs // 2),
+        target=4.0,
+        ema_decay=0.95,
+    ),
 ])
 
 model = tf.keras.Sequential([
