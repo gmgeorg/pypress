@@ -35,7 +35,7 @@ def test_uniform_regularizer_uniform():
     weights = np.full((units, n_states), 1.0 / n_states, dtype=np.float32)
     # Instantiate the regularizer
     reg = Uniform(l2=l2)
-    penalty = reg(tf.convert_to_tensor(weights))
+    penalty = reg.penalty(tf.convert_to_tensor(weights))
 
     # Expected penalty: l2 * (log(3) - log(3)) ** 2 = 0
     np.testing.assert_allclose(penalty.numpy(), 0.0, atol=1e-3)
@@ -55,7 +55,7 @@ def test_uniform_regularizer_nonuniform():
     weights = np.concatenate([row_uniform, row_nonuniform], axis=0)
 
     reg = Uniform(l2=l2)
-    penalty = reg(tf.convert_to_tensor(weights))
+    penalty = reg.penalty(tf.convert_to_tensor(weights))
 
     # Since the uniform row contributes zero penalty, the overall mean entropy is < log(3)
     # and penalty should be positive.
@@ -76,7 +76,7 @@ def test_uniform_regularizer_scale_invariant_with_k():
     for n_states in (3, 10, 100):
         row = np.zeros((1, n_states), dtype=np.float32)
         row[0, 0] = 1.0  # fully deterministic row: entropy = 0
-        penalty = Uniform(l2=l2)(tf.convert_to_tensor(row))
+        penalty = Uniform(l2=l2).penalty(tf.convert_to_tensor(row))
         # Normalized deviation is exactly 1.0 at zero entropy, so penalty == l2.
         np.testing.assert_allclose(penalty.numpy(), l2, atol=1e-5)
 
@@ -89,8 +89,8 @@ def test_uniform_is_special_case_of_target_entropy():
 
     assert isinstance(Uniform(), TargetEntropy)
 
-    uniform_penalty = Uniform(l2=1.0)(x)
-    target_entropy_penalty = TargetEntropy(l2=1.0, target=np.log(n_states))(x)
+    uniform_penalty = Uniform(l2=1.0).penalty(x)
+    target_entropy_penalty = TargetEntropy(l2=1.0, target=np.log(n_states)).penalty(x)
     np.testing.assert_allclose(
         uniform_penalty.numpy(), target_entropy_penalty.numpy(), atol=1e-6
     )
@@ -105,7 +105,7 @@ def test_target_entropy_default_target_is_log_half_k():
     # Uniform row: entropy == log(K).
     weights = np.full((1, n_states), 1.0 / n_states, dtype=np.float32)
     reg = TargetEntropy(l2=1.0)
-    penalty = reg(tf.convert_to_tensor(weights))
+    penalty = reg.penalty(tf.convert_to_tensor(weights))
 
     target = np.log(0.5 * n_states)
     expected_penalty = ((np.log(n_states) - target) / np.log(n_states)) ** 2
@@ -117,7 +117,7 @@ def test_target_entropy_explicit_target_zero_penalty():
     n_states = 3
     weights = np.full((1, n_states), 1.0 / n_states, dtype=np.float32)
     reg = TargetEntropy(l2=1.0, target=float(np.log(n_states)))
-    penalty = reg(tf.convert_to_tensor(weights))
+    penalty = reg.penalty(tf.convert_to_tensor(weights))
     np.testing.assert_allclose(penalty.numpy(), 0.0, atol=1e-5)
 
 
@@ -125,7 +125,7 @@ def test_target_entropy_clamps_active_states_at_one():
     """For K=1 (single, deterministic state), the dynamic target is clamped to log(1) = 0."""
     weights = np.array([[1.0]], dtype=np.float32)
     reg = TargetEntropy(l2=1.0)
-    penalty = reg(tf.convert_to_tensor(weights))
+    penalty = reg.penalty(tf.convert_to_tensor(weights))
     # Entropy of a single deterministic state is 0, and the clamped target is also 0.
     np.testing.assert_allclose(penalty.numpy(), 0.0, atol=1e-6)
 
@@ -158,7 +158,7 @@ def test_degrees_of_freedom_regularizer_zero_penalty():
     # Then, tr_kernel(weights) should equal 1 + 1 = 2.
 
     reg = DegreesOfFreedom(l2=l2, target=df_target)
-    penalty = reg(tf.convert_to_tensor(weights))
+    penalty = reg.penalty(tf.convert_to_tensor(weights))
 
     # Expected penalty: l2 * (2 - 2) ** 2 = 0.
     np.testing.assert_allclose(penalty.numpy(), 0.0, atol=1e-6)
@@ -181,7 +181,7 @@ def test_degrees_of_freedom_regularizer_nonzero_penalty():
     weights = np.array([[1, 2], [0, 0]], dtype=np.float32)
 
     reg = DegreesOfFreedom(l2=l2, target=df_target)
-    penalty = reg(tf.convert_to_tensor(weights))
+    penalty = reg.penalty(tf.convert_to_tensor(weights))
 
     # Expected penalty is 1.0 * (3 - 2) ** 2 = 1.0
     np.testing.assert_allclose(penalty.numpy(), 1.0, atol=1e-6)
@@ -193,7 +193,7 @@ def test_normalized_degrees_of_freedom_is_scale_invariant_with_k():
     for n_states, n_alive, target in ((10, 3, 5.0), (20, 6, 10.0)):
         x = _hard_assignment_weights(n_states=n_states, n_alive=n_alive)
         penalties.append(
-            DegreesOfFreedom(l2=1.0, target=target, normalize=True)(x).numpy()
+            DegreesOfFreedom(l2=1.0, target=target, normalize=True).penalty(x).numpy()
         )
 
     # (3 - 5) / 10 == (6 - 10) / 20 == -0.2.
@@ -315,7 +315,7 @@ def test_state_size_entropy_zero_for_uniform_usage():
     for row in range(weights.shape[0]):
         weights[row, row % n_states] = 1.0
 
-    penalty = StateSizeEntropy(l2=1.0)(tf.convert_to_tensor(weights))
+    penalty = StateSizeEntropy(l2=1.0).penalty(tf.convert_to_tensor(weights))
     np.testing.assert_allclose(penalty.numpy(), 0.0, atol=1e-6)
 
 
@@ -360,7 +360,7 @@ def test_state_size_entropy_bounded_by_l2():
         # All population mass on a single state: marginal entropy is 0.
         weights = np.zeros((4, n_states), dtype=np.float32)
         weights[:, 0] = 1.0
-        penalty = StateSizeEntropy(l2=l2)(tf.convert_to_tensor(weights))
+        penalty = StateSizeEntropy(l2=l2).penalty(tf.convert_to_tensor(weights))
         np.testing.assert_allclose(penalty.numpy(), l2, atol=1e-5)
 
 
@@ -373,7 +373,9 @@ def test_state_size_entropy_active_fraction_is_one_sided():
     weights = tf.convert_to_tensor(weights)
 
     np.testing.assert_allclose(
-        StateSizeEntropy(l2=1.0, active_fraction=0.5)(weights).numpy(), 0.0, atol=1e-6
+        StateSizeEntropy(l2=1.0, active_fraction=0.5).penalty(weights).numpy(),
+        0.0,
+        atol=1e-6,
     )
     # Using *more* states than the floor stays unpenalized ...
     all_used = np.zeros((20, 10), dtype=np.float32)
@@ -387,7 +389,7 @@ def test_state_size_entropy_active_fraction_is_one_sided():
         atol=1e-6,
     )
     # ... while active_fraction=1.0 still penalizes the half-used matrix.
-    assert StateSizeEntropy(l2=1.0)(weights).numpy() > 0.0
+    assert StateSizeEntropy(l2=1.0).penalty(weights).numpy() > 0.0
 
 
 def test_state_size_entropy_equals_normalized_kl_from_uniform():
@@ -396,7 +398,7 @@ def test_state_size_entropy_equals_normalized_kl_from_uniform():
         [[0.7, 0.2, 0.1], [0.6, 0.3, 0.1], [0.8, 0.15, 0.05]], dtype=np.float32
     )
     l2 = 0.3
-    penalty = StateSizeEntropy(l2=l2)(tf.convert_to_tensor(weights)).numpy()
+    penalty = StateSizeEntropy(l2=l2).penalty(tf.convert_to_tensor(weights)).numpy()
 
     shares = weights.sum(axis=0) / weights.sum()
     kl = np.sum(shares * np.log(shares * weights.shape[1]))
@@ -409,7 +411,7 @@ def test_state_size_entropy_gradient_revives_dead_state():
         np.array([[0.98, 0.01, 0.01], [0.98, 0.01, 0.01]], dtype=np.float32)
     )
     with tf.GradientTape() as tape:
-        penalty = StateSizeEntropy(l2=1.0)(weights)
+        penalty = StateSizeEntropy(l2=1.0).penalty(weights)
     grad = tape.gradient(penalty, weights).numpy()
 
     # Increasing the starved columns lowers the penalty (negative gradient),
@@ -427,7 +429,7 @@ def test_state_size_entropy_handles_single_state_and_zero_columns():
     # Exact float zeros in a column (softmax underflow) stay finite.
     x = tf.Variable(np.array([[0.5, 0.5, 0.0], [0.5, 0.5, 0.0]], dtype=np.float32))
     with tf.GradientTape() as tape:
-        penalty = StateSizeEntropy(l2=1.0)(x)
+        penalty = StateSizeEntropy(l2=1.0).penalty(x)
     assert np.isfinite(penalty.numpy())
     assert np.all(np.isfinite(tape.gradient(penalty, x).numpy()))
 
@@ -447,7 +449,9 @@ def test_state_size_entropy_get_config_roundtrip():
 
     x = _hard_assignment_weights(n_states=8, n_alive=3)
     np.testing.assert_allclose(
-        StateSizeEntropy.from_config(config)(x).numpy(), reg(x).numpy(), atol=1e-6
+        StateSizeEntropy.from_config(config).penalty(x).numpy(),
+        reg.penalty(x).numpy(),
+        atol=1e-6,
     )
 
 
@@ -463,14 +467,16 @@ def test_state_size_entropy_in_combined_regularizer():
     x = _hard_assignment_weights(n_states=9, n_alive=3)
 
     expected = (
-        Uniform(l2=0.01)(x)
-        + DegreesOfFreedom(l2=0.02, target=3.0)(x)
-        + StateSizeEntropy(l2=0.05, active_fraction=0.5)(x)
+        Uniform(l2=0.01).penalty(x)
+        + DegreesOfFreedom(l2=0.02, target=3.0).penalty(x)
+        + StateSizeEntropy(l2=0.05, active_fraction=0.5).penalty(x)
     )
-    np.testing.assert_allclose(combined(x).numpy(), expected.numpy(), atol=1e-6)
+    np.testing.assert_allclose(combined.penalty(x).numpy(), expected.numpy(), atol=1e-6)
 
     restored = CombinedRegularizer.from_config(combined.get_config())
-    np.testing.assert_allclose(restored(x).numpy(), combined(x).numpy(), atol=1e-6)
+    np.testing.assert_allclose(
+        restored.penalty(x).numpy(), combined.penalty(x).numpy(), atol=1e-6
+    )
 
 
 # -------- Tests for the MinStateSize Regularizer --------
@@ -527,9 +533,9 @@ def test_min_state_size_catches_what_state_size_entropy_misses():
 
     # active_fraction=0.5 is the setting matching a 5% floor at K=9.
     np.testing.assert_allclose(
-        StateSizeEntropy(l2=1.0, active_fraction=0.5)(x).numpy(), 0.0, atol=1e-6
+        StateSizeEntropy(l2=1.0, active_fraction=0.5).penalty(x).numpy(), 0.0, atol=1e-6
     )
-    assert MinStateSize(l2=1.0, min_share=0.05)(x).numpy() > 0.0
+    assert MinStateSize(l2=1.0, min_share=0.05).penalty(x).numpy() > 0.0
 
 
 def test_min_state_size_bounded_and_scale_invariant_in_k():
@@ -555,10 +561,10 @@ def test_min_state_size_default_is_half_fair_share():
     shares[1:] = (1.0 - shares[0]) / (n_states - 1)
     x = _marginal_weights(shares)
 
-    np.testing.assert_allclose(MinStateSize(l2=1.0)(x).numpy(), 0.0, atol=1e-6)
+    np.testing.assert_allclose(MinStateSize(l2=1.0).penalty(x).numpy(), 0.0, atol=1e-6)
     np.testing.assert_allclose(
-        MinStateSize(l2=1.0)(x).numpy(),
-        MinStateSize(l2=1.0, min_share=0.5 / n_states)(x).numpy(),
+        MinStateSize(l2=1.0).penalty(x).numpy(),
+        MinStateSize(l2=1.0, min_share=0.5 / n_states).penalty(x).numpy(),
         atol=1e-6,
     )
 
@@ -587,7 +593,7 @@ def test_min_state_size_gradient_revives_starved_state():
         np.array([[0.97, 0.02, 0.01], [0.97, 0.02, 0.01]], dtype=np.float32)
     )
     with tf.GradientTape() as tape:
-        penalty = MinStateSize(l2=1.0, min_share=0.2)(x)
+        penalty = MinStateSize(l2=1.0, min_share=0.2).penalty(x)
     grad = tape.gradient(penalty, x).numpy()
 
     assert np.all(grad[:, 1:] < 0.0)
@@ -602,7 +608,7 @@ def test_min_state_size_handles_zero_columns_and_single_state():
 
     x = tf.Variable(np.array([[0.5, 0.5, 0.0], [0.5, 0.5, 0.0]], dtype=np.float32))
     with tf.GradientTape() as tape:
-        penalty = MinStateSize(l2=1.0, min_share=0.1)(x)
+        penalty = MinStateSize(l2=1.0, min_share=0.1).penalty(x)
     assert np.isfinite(penalty.numpy())
     assert np.all(np.isfinite(tape.gradient(penalty, x).numpy()))
 
@@ -613,7 +619,9 @@ def test_min_state_size_get_config_roundtrip():
     assert reg.get_config() == {"l2": 0.25, "min_share": 0.05, "ema_decay": None}
     x = _hard_assignment_weights(n_states=8, n_alive=3)
     np.testing.assert_allclose(
-        MinStateSize.from_config(reg.get_config())(x).numpy(), reg(x).numpy(), atol=1e-6
+        MinStateSize.from_config(reg.get_config()).penalty(x).numpy(),
+        reg.penalty(x).numpy(),
+        atol=1e-6,
     )
 
     default_reg = MinStateSize(l2=0.25)
@@ -623,8 +631,8 @@ def test_min_state_size_get_config_roundtrip():
         "ema_decay": None,
     }
     np.testing.assert_allclose(
-        MinStateSize.from_config(default_reg.get_config())(x).numpy(),
-        default_reg(x).numpy(),
+        MinStateSize.from_config(default_reg.get_config()).penalty(x).numpy(),
+        default_reg.penalty(x).numpy(),
         atol=1e-6,
     )
 
@@ -636,11 +644,15 @@ def test_min_state_size_in_combined_regularizer():
     )
     x = _hard_assignment_weights(n_states=9, n_alive=3)
 
-    expected = Uniform(l2=0.01)(x) + MinStateSize(l2=0.05, min_share=0.05)(x)
-    np.testing.assert_allclose(combined(x).numpy(), expected.numpy(), atol=1e-6)
+    expected = Uniform(l2=0.01).penalty(x) + MinStateSize(
+        l2=0.05, min_share=0.05
+    ).penalty(x)
+    np.testing.assert_allclose(combined.penalty(x).numpy(), expected.numpy(), atol=1e-6)
 
     restored = CombinedRegularizer.from_config(combined.get_config())
-    np.testing.assert_allclose(restored(x).numpy(), combined(x).numpy(), atol=1e-6)
+    np.testing.assert_allclose(
+        restored.penalty(x).numpy(), combined.penalty(x).numpy(), atol=1e-6
+    )
 
 
 # -------- Tests for EMA smoothing of the state-size marginal --------
@@ -666,15 +678,17 @@ def test_ema_defaults_to_off():
     assert plain.get_config()["ema_decay"] is None
     assert plain.smoothed_statistics() == {}
     np.testing.assert_allclose(
-        plain(x).numpy(), MinStateSize(l2=1.0, min_share=0.05)(x).numpy(), atol=1e-7
+        plain.penalty(x).numpy(),
+        MinStateSize(l2=1.0, min_share=0.05).penalty(x).numpy(),
+        atol=1e-7,
     )
 
 
 def test_ema_first_call_equals_the_batch_estimate():
     """Bias correction makes step 1 exactly the batch value, not a zero-dragged one."""
     x = _hard_assignment_weights(n_states=9, n_alive=4)
-    smoothed = MinStateSize(l2=1.0, min_share=0.05, ema_decay=0.99)(x).numpy()
-    plain = MinStateSize(l2=1.0, min_share=0.05)(x).numpy()
+    smoothed = MinStateSize(l2=1.0, min_share=0.05, ema_decay=0.99).penalty(x).numpy()
+    plain = MinStateSize(l2=1.0, min_share=0.05).penalty(x).numpy()
     np.testing.assert_allclose(smoothed, plain, rtol=1e-5)
 
 
@@ -726,7 +740,7 @@ def test_ema_still_passes_gradient_through_the_current_batch():
 
     x = tf.Variable(np.array([[0.97, 0.02, 0.01]] * 4, dtype=np.float32))
     with tf.GradientTape() as tape:
-        penalty = reg(x)
+        penalty = reg.penalty(x)
     grad = tape.gradient(penalty, x).numpy()
 
     assert np.all(np.isfinite(grad))
@@ -759,14 +773,14 @@ def test_scheduled_l2_is_read_at_call_time():
     x = _marginal_weights([0.9, 0.05, 0.05])
 
     # Unscheduled, the value sits at `end` -- the fully enforced penalty.
-    baseline = MinStateSize(l2=2.0, min_share=0.2)(x).numpy()
+    baseline = MinStateSize(l2=2.0, min_share=0.2).penalty(x).numpy()
     assert baseline > 0.0
-    np.testing.assert_allclose(reg(x).numpy(), baseline, rtol=1e-6)
+    np.testing.assert_allclose(reg.penalty(x).numpy(), baseline, rtol=1e-6)
 
     set_epoch(0)
-    np.testing.assert_allclose(reg(x).numpy(), 0.0, atol=1e-7)
+    np.testing.assert_allclose(reg.penalty(x).numpy(), 0.0, atol=1e-7)
     set_epoch(1)
-    np.testing.assert_allclose(reg(x).numpy(), baseline, rtol=1e-6)
+    np.testing.assert_allclose(reg.penalty(x).numpy(), baseline, rtol=1e-6)
 
 
 def test_scheduled_degrees_of_freedom_target():
@@ -776,11 +790,11 @@ def test_scheduled_degrees_of_freedom_target():
     x = _hard_assignment_weights(n_states=9, n_alive=3)
 
     # df is 3 here. Unscheduled the target sits at `end` (3), so no penalty.
-    np.testing.assert_allclose(reg(x).numpy(), 0.0, atol=1e-4)
+    np.testing.assert_allclose(reg.penalty(x).numpy(), 0.0, atol=1e-4)
     set_epoch(0)
-    assert reg(x).numpy() > 30.0
+    assert reg.penalty(x).numpy() > 30.0
     set_epoch(6)
-    np.testing.assert_allclose(reg(x).numpy(), 0.0, atol=1e-4)
+    np.testing.assert_allclose(reg.penalty(x).numpy(), 0.0, atol=1e-4)
 
 
 def test_scheduled_degrees_of_freedom_target_validated_over_whole_schedule():
@@ -846,8 +860,10 @@ def test_entropy_fraction_is_the_k_independent_knob():
     """entropy_fraction=f must equal target=log(f * K) for the K at hand."""
     n_states = 8
     x = _hard_assignment_weights(n_states=n_states, n_alive=3)
-    by_fraction = TargetEntropy(l2=1.0, entropy_fraction=0.5)(x).numpy()
-    by_target = TargetEntropy(l2=1.0, target=float(np.log(0.5 * n_states)))(x).numpy()
+    by_fraction = TargetEntropy(l2=1.0, entropy_fraction=0.5).penalty(x).numpy()
+    by_target = (
+        TargetEntropy(l2=1.0, target=float(np.log(0.5 * n_states))).penalty(x).numpy()
+    )
     np.testing.assert_allclose(by_fraction, by_target, rtol=1e-6)
 
 
@@ -929,7 +945,9 @@ def test_every_hyperparameter_round_trips_and_validates(
     restored = cls.from_config(config)
     assert restored.get_config() == reg.get_config()
     x = _hard_assignment_weights(n_states=6, n_alive=3)
-    np.testing.assert_allclose(restored(x).numpy(), reg(x).numpy(), atol=1e-6)
+    np.testing.assert_allclose(
+        restored.penalty(x).numpy(), reg.penalty(x).numpy(), atol=1e-6
+    )
 
     with pytest.raises(ValueError, match=name):
         cls(**{**extra, name: bad})
@@ -1026,3 +1044,58 @@ def test_an_unsmoothed_regularizer_can_be_shared_between_layers():
     x = tf.ones((2, 3))
     PredictiveStateSimplex(3, activity_regularizer=shared)(x)
     PredictiveStateSimplex(5, activity_regularizer=shared)(x)
+
+
+# -------- Penalty strength does not depend on the batch size --------
+
+
+def _keras_activity_loss(regularizer, weights: np.ndarray) -> float:
+    """The loss Keras adds for 'regularizer' as the activity regularizer of a layer."""
+    layer = tf.keras.layers.Activation("linear", activity_regularizer=regularizer)
+    layer(tf.convert_to_tensor(weights))
+    return float(sum(loss.numpy() for loss in layer.losses))
+
+
+@pytest.mark.parametrize(
+    "make_regularizer",
+    [
+        lambda: Uniform(l2=2.0),
+        lambda: TargetEntropy(l2=2.0, entropy_fraction=0.5),
+        lambda: StateSizeEntropy(l2=2.0),
+        lambda: MinStateSize(l2=2.0, min_share=0.2),
+        lambda: DegreesOfFreedom(l2=2.0, target=1.5),
+        lambda: CombinedRegularizer(
+            [MinStateSize(l2=2.0, min_share=0.2), DegreesOfFreedom(l2=1.0, target=1.5)]
+        ),
+    ],
+)
+@pytest.mark.parametrize("batch_size", [8, 256])
+def test_keras_adds_exactly_the_penalty_at_any_batch_size(make_regularizer, batch_size):
+    """Keras divides activity losses by the batch size; PRESS regularizers undo it."""
+    rng = np.random.default_rng(0)
+    # The same population at both batch sizes, so the penalty is the same.
+    pattern = rng.dirichlet(np.full(4, 0.5), size=8).astype(np.float32)
+    weights = np.tile(pattern, (batch_size // 8, 1))
+
+    expected = make_regularizer().penalty(tf.convert_to_tensor(weights)).numpy()
+    assert expected > 0.0
+    np.testing.assert_allclose(
+        _keras_activity_loss(make_regularizer(), weights), expected, rtol=1e-5
+    )
+
+
+def test_combined_regularizer_with_keras_child_keeps_keras_scaling():
+    """A built-in Keras child adds what Keras would add for it alone."""
+    weights = np.random.default_rng(1).dirichlet(np.ones(3), size=16).astype(np.float32)
+    keras_l1 = tf.keras.regularizers.L1(0.1)
+    combined = CombinedRegularizer([keras_l1, Uniform(l2=1.0)])
+    x = tf.convert_to_tensor(weights)
+
+    np.testing.assert_allclose(
+        _keras_activity_loss(combined, weights),
+        _keras_activity_loss(keras_l1, weights) + Uniform(l2=1.0).penalty(x).numpy(),
+        rtol=1e-5,
+    )
+    np.testing.assert_allclose(
+        combined.penalty(x).numpy(), _keras_activity_loss(combined, weights), rtol=1e-5
+    )
