@@ -1,284 +1,265 @@
-"""Initializers for PRESS layers."""
+"""Initializers for state-conditional parameters, from original-scale values.
 
-from typing import Union, Optional, Sequence
+A table of state-conditional parameters has one row per predictive state and
+one column per parameter (for `PredictiveStateMeans`, one column per output
+unit). Its weights are logits: the layer applies an activation to them. Users
+give initial values on the original scale -- after the activation -- and the
+initializer inverts the activation column by column.
 
-import tensorflow as tf
+`init_values` takes the same three forms everywhere:
+
+- a scalar: every entry of the table;
+- a 1D array of length P (one value per column): broadcast across states;
+- a 2D array of shape (P, K): state-specific values, one row per column.
+"""
+
+from typing import Optional, Sequence, Union
+
 import numpy as np
+import pandas as pd
+import tensorflow as tf
 
+from . import activations as pr_act
 from .activations import get_inverse_activation
 
+InitValues = Union[float, Sequence[float], Sequence[Sequence[float]], np.ndarray]
 
-def _get_predictive_state_means_init(
-    init_values: Union[float, np.ndarray],
-    n_states: int,
-    units: int,
-    activation: str = "linear",
-) -> tf.Tensor:
-    """Gets initial weights for predictive state means.
 
-    Converts init_values from original scale to logit scale using the inverse
-    activation function.
-
-    Args:
-        init_values: Initial values on original scale (after activation).
-        n_states: Number of predictive states.
-        units: Number of output units.
-        activation: Activation function name (e.g., "linear", "sigmoid").
-
-    Returns:
-        TensorFlow variable with initial logits (before activation) of shape
-        (n_states, units).
+def state_conditional_values(
+    init_values: InitValues, n_states: int, n_columns: int
+) -> np.ndarray:
+    """Expands 'init_values' into a table of shape (n_states, n_columns).
 
     Raises:
-        ValueError: If init_values has wrong shape or type, or if activation
-            is not supported.
+      ValueError: if 'init_values' is not a number or array, or its shape does
+        not match the table.
     """
-    # Get inverse activation function
-    inverse_fn = get_inverse_activation(activation)
-
-    # Build the initialized value on original scale with shape (n_states, units)
-    ones = np.ones((n_states, units))
-    val = None
-    if isinstance(init_values, (float, int)):
-        # Scalar: broadcast to all states and units
-        val = ones * init_values
-    elif isinstance(init_values, np.ndarray):
-        if len(init_values.shape) == 1:
-            # Shape (units,): broadcast to all states
-            assert init_values.shape[0] == units, (
-                f"init_values shape[0]={init_values.shape[0]} must match units={units}"
-            )
-            val = ones * init_values[np.newaxis, :]
-        elif len(init_values.shape) == 2:
-            # Shape (units, n_states): state-specific values, transpose to (n_states, units)
-            assert init_values.shape[0] == units, (
-                f"init_values shape[0]={init_values.shape[0]} must match units={units}"
-            )
-            assert init_values.shape[1] == n_states, (
-                f"init_values shape[1]={init_values.shape[1]} must match n_states={n_states}"
-            )
-            val = init_values.T  # Transpose from (units, n_states) to (n_states, units)
-        else:
-            raise ValueError("Initial values must be a scalar, 1D array, or 2D array.")
-    else:
+    if isinstance(init_values, bool) or isinstance(init_values, str):
         raise ValueError(
-            f"'init_values' must be float or np.ndarray. Got {type(init_values)}."
+            f"'init_values' must be a number or an array. Got {type(init_values)}."
         )
+    try:
+        values = np.asarray(init_values, dtype=float)
+    except (TypeError, ValueError) as error:
+        raise ValueError(
+            f"'init_values' must be a number or an array. Got {type(init_values)}."
+        ) from error
 
-    if val is None:
-        raise RuntimeError(f"Failed to create initialization. Got {init_values}")
+    if values.ndim == 0:
+        return np.full((n_states, n_columns), float(values))
+    if values.ndim == 1:
+        if values.shape[0] != n_columns:
+            raise ValueError(
+                f"1D 'init_values' must have one value per column ({n_columns}). "
+                f"Got shape {values.shape}."
+            )
+        return np.tile(values, (n_states, 1))
+    if values.ndim == 2:
+        if values.shape != (n_columns, n_states):
+            raise ValueError(
+                f"2D 'init_values' must have shape ({n_columns}, {n_states}): one "
+                f"row per column, one entry per state. Got shape {values.shape}."
+            )
+        return values.T
+    raise ValueError(
+        f"'init_values' must be a scalar, 1D or 2D array. Got shape {values.shape}."
+    )
 
-    # Convert from original scale to logit scale using inverse activation
-    val_logits = inverse_fn(tf.constant(val, dtype=tf.float32))
 
-    return tf.Variable(val_logits)
+def state_conditional_logits(
+    init_values: InitValues,
+    n_states: int,
+    n_columns: int,
+    activations: Union[str, Sequence[str]] = "linear",
+) -> tf.Tensor:
+    """Logits of shape (n_states, n_columns) whose activations equal 'init_values'.
+
+    Args:
+      init_values: Values on the original scale, in one of the forms described
+        in the module docstring.
+      n_states: Number of predictive states, K.
+      n_columns: Number of parameters per state, P.
+      activations: One activation name for all columns, or one per column.
+
+    Raises:
+      ValueError: on a shape mismatch, or an activation without a known inverse.
+    """
+    values = state_conditional_values(init_values, n_states, n_columns)
+    names = pr_act.names(activations, n_columns)
+    if len(names) != n_columns:
+        raise ValueError(
+            f"Need one activation per column ({n_columns}). Got {len(names)}."
+        )
+    columns = [
+        get_inverse_activation(name)(tf.constant(values[:, i], dtype=tf.float32))
+        for i, name in enumerate(names)
+    ]
+    return tf.stack(columns, axis=1)
+
+
+def _to_config(init_values: InitValues):
+    """JSON-safe form of 'init_values'."""
+    return init_values.tolist() if isinstance(init_values, np.ndarray) else init_values
 
 
 @tf.keras.utils.register_keras_serializable(package="pypress")
-class PredictiveStateMeansInitializer(tf.keras.initializers.Initializer):
-    """Initializer for weights of the PredictiveStateMeans() layer.
-
-    This initializer takes mean values on the original scale (after activation)
-    and converts them to logits (before activation) using the inverse activation
-    function. This allows users to provide initialization values in the natural
-    scale of their data.
+class StateConditionalInitializer(tf.keras.initializers.Initializer):
+    """Initializes a (n_states, n_columns) table of logits from original-scale values.
 
     Example:
-        >>> # For regression with linear activation, initialize to empirical mean
-        >>> y_mean = np.mean(y_train, axis=0)  # e.g., [0.5]
-        >>> initializer = PredictiveStateMeansInitializer(
-        ...     init_values=y_mean,
-        ...     n_states=5,
-        ...     activation="linear"
-        ... )
-        >>>
-        >>> # For classification with sigmoid, initialize to 0.8 probability
-        >>> initializer = PredictiveStateMeansInitializer(
-        ...     init_values=0.8,
-        ...     n_states=3,
-        ...     activation="sigmoid"
-        ... )
+        >>> # Gaussian [mean, std] per state, the same in every state.
+        >>> init = StateConditionalInitializer([0.0, 1.0], ["linear", "softplus"])
+        >>> init((5, 2)).shape
+        TensorShape([5, 2])
     """
 
     def __init__(
         self,
-        init_values: Union[float, np.ndarray],
-        n_states: int,
+        init_values: InitValues,
+        activations: Union[str, Sequence[str]] = "linear",
+    ):
+        """Initializes the initializer.
+
+        Args:
+          init_values: Values on the original scale (after activation).
+          activations: One activation name for all columns, or one per column.
+        """
+        self._init_values = init_values
+        self._activations = activations
+
+    def __call__(self, shape, dtype=None, **kwargs):
+        """Returns the logits for a table of 'shape' (n_states, n_columns)."""
+        n_states, n_columns = shape
+        logits = state_conditional_logits(
+            self._init_values, n_states, n_columns, self._activations
+        )
+        return tf.cast(logits, dtype or tf.keras.backend.floatx())
+
+    def get_config(self):
+        """Gets the config."""
+        return {
+            "init_values": _to_config(self._init_values),
+            "activations": self._activations,
+        }
+
+
+@tf.keras.utils.register_keras_serializable(package="pypress")
+class PredictiveStateMeansInitializer(StateConditionalInitializer):
+    """Initializer for the state-conditional means of `PredictiveStateMeans`.
+
+    Example:
+        >>> # Sigmoid outputs initialized at 0.8 probability in every state.
+        >>> init = PredictiveStateMeansInitializer(0.8, n_states=3, activation="sigmoid")
+    """
+
+    def __init__(
+        self,
+        init_values: InitValues,
+        n_states: Optional[int] = None,
         activation: str = "linear",
         units: Optional[int] = None,
         **kwargs,
     ):
-        """Initializes class.
+        """Initializes the initializer.
 
         Args:
-            init_values: Initial values on original scale (after activation).
-                Can be a float (broadcasted to all units and states) or a 1D
-                numpy array of shape (units,) broadcasted across states.
-            n_states: Number of predictive states.
-            activation: Activation function name (e.g., "linear", "sigmoid",
-                "softplus"). Must be a supported activation with a known inverse.
-            units: Output units; required if init_values is float; optional if
-                init_values is an array (inferred from array shape).
+          init_values: Values on the original scale (after activation).
+          n_states: Unused; the number of states comes from the weight shape.
+            Kept for backwards compatibility.
+          activation: Activation name applied to the means.
+          units: Unused; the number of units comes from the weight shape. Kept
+            for backwards compatibility.
         """
-        super().__init__(**kwargs)
-        self._init_values = init_values
-        self._n_states = n_states
-        self._activation = activation
-        self._units = units
-        if self._units is None:
-            if isinstance(init_values, (float, int)):
-                self._units = 1
-            elif isinstance(init_values, np.ndarray):
-                self._units = init_values.shape[0]
+        super().__init__(init_values=init_values, activations=activation)
 
-    def __call__(self, shape, dtype=None, **kwargs):
-        """Returns a tensor object initialized as specified by the initializer.
-
-        Args:
-            shape: Shape of the tensor.
-            dtype: Optional dtype of the tensor. Only numeric or boolean dtypes are
-                supported. If not specified, `tf.keras.backend.floatx()` is used,
-                which default to `float32` unless you configured it otherwise
-                (via `tf.keras.backend.set_floatx(float_dtype)`).
-            **kwargs: Additional keyword arguments.
-
-        Returns:
-            Initialized tensor with logits (before activation) computed from
-            init_values using the inverse activation function.
-        """
-        return _get_predictive_state_means_init(
-            self._init_values,
-            n_states=self._n_states,
-            units=shape[-1],
-            activation=self._activation,
-        )
-
-
-def _get_predictive_state_params_init(
-    init_values: np.ndarray,
-    n_states: int,
-    n_params_per_state: int,
-    activations: Sequence[str],
-) -> tf.Tensor:
-    """Gets initial weights for predictive state parameters.
-
-    Converts init_values from original scale to logit scale using inverse
-    activation functions for each parameter.
-
-    Args:
-        init_values: np.ndarray of shape (n_params_per_state, n_states) with
-            state-specific values for each parameter. Each row represents one
-            parameter, columns are states. Use initialize_from_y with
-            return_params=True to generate this from data.
-        n_states: Number of predictive states.
-        n_params_per_state: Number of parameters per state.
-        activations: Sequence of activation function names (one per parameter).
-
-    Returns:
-        TensorFlow variable with initial logits of shape (n_states, n_params_per_state).
-
-    Raises:
-        ValueError: If init_values shape doesn't match (n_params_per_state, n_states).
-    """
-    # Convert to numpy array if needed
-    init_values = np.asarray(init_values)
-
-    # Check shape
-    if len(init_values.shape) != 2:
-        raise ValueError(
-            f"init_values must be a 2D array, got shape {init_values.shape}"
-        )
-
-    if init_values.shape != (n_params_per_state, n_states):
-        raise ValueError(
-            f"init_values must have shape ({n_params_per_state}, {n_states}), "
-            f"got {init_values.shape}"
-        )
-
-    if len(activations) != n_params_per_state:
-        raise ValueError(
-            f"activations must have length {n_params_per_state}, got {len(activations)}"
-        )
-
-    # Build initialized values for each parameter
-    param_logits = []
-    for i, activation in enumerate(activations):
-        # Get inverse activation for this parameter
-        inverse_fn = get_inverse_activation(activation)
-
-        # Get state-specific values for this parameter (row i)
-        val = init_values[i, :]  # Shape: (n_states,)
-
-        # Convert to logits
-        val_logits = inverse_fn(tf.constant(val, dtype=tf.float32))
-        param_logits.append(val_logits[:, tf.newaxis])  # Make (n_states, 1)
-
-    # Concatenate along parameter axis: (n_states, n_params_per_state)
-    result = tf.concat(param_logits, axis=1)
-    return tf.Variable(result)
+    def get_config(self):
+        """Gets the config."""
+        return {
+            "init_values": _to_config(self._init_values),
+            "activation": self._activations,
+        }
 
 
 @tf.keras.utils.register_keras_serializable(package="pypress")
-class PredictiveStateParamsInitializer(tf.keras.initializers.Initializer):
-    """Initializer for weights of the PredictiveStateParams() layer.
-
-    This initializer takes parameter values on the original scale (after activation)
-    and converts them to logits (before activation) using inverse activation functions.
-    Each parameter can have its own activation and initialization value.
+class PredictiveStateParamsInitializer(StateConditionalInitializer):
+    """Initializer for the state-conditional parameters of `PredictiveStateParams`.
 
     Example:
-        >>> # For Gaussian distribution: [mean, std] with ['linear', 'softplus']
-        >>> initializer = PredictiveStateParamsInitializer(
-        ...     init_values=[0.0, 1.0],  # mean=0, std=1
-        ...     n_states=5,
-        ...     activations=["linear", "softplus"]
+        >>> # Gaussian [mean, std], the same in every state.
+        >>> init = PredictiveStateParamsInitializer(
+        ...     init_values=[0.0, 1.0], n_states=5, activations=["linear", "softplus"]
         ... )
     """
 
     def __init__(
         self,
-        init_values: Sequence[Union[float, np.ndarray]],
-        n_states: int,
-        activations: Sequence[str],
+        init_values: InitValues,
+        n_states: Optional[int] = None,
+        activations: Union[str, Sequence[str]] = "linear",
         **kwargs,
     ):
-        """Initializes class.
+        """Initializes the initializer.
 
         Args:
-            init_values: Sequence of initial values on original scale (one per parameter).
-                Each element can be a scalar. Must have length n_params_per_state.
-            n_states: Number of predictive states.
-            activations: Sequence of activation function names (one per parameter).
-                Must have same length as init_values.
+          init_values: Values on the original scale (after activation).
+          n_states: Unused; the number of states comes from the weight shape.
+            Kept for backwards compatibility.
+          activations: One activation name for all parameters, or one per
+            parameter.
         """
-        super().__init__(**kwargs)
-        self._init_values = list(init_values)
-        self._n_states = n_states
-        self._activations = list(activations)
-        self._n_params_per_state = len(self._init_values)
+        super().__init__(init_values=init_values, activations=activations)
 
-        # Validate lengths match
-        if len(self._activations) != self._n_params_per_state:
-            raise ValueError(
-                f"activations length {len(self._activations)} must match "
-                f"init_values length {self._n_params_per_state}"
-            )
 
-    def __call__(self, shape, dtype=None, **kwargs):
-        """Returns a tensor object initialized as specified by the initializer.
+def initialize_from_y(
+    y: Union[np.ndarray, pd.Series, pd.DataFrame],
+    n_states: int,
+    return_params: bool = False,
+    max_iter: int = 10,
+) -> np.ndarray:
+    """Initial state-conditional values from a 1D Gaussian mixture fitted to y.
 
-        Args:
-            shape: Shape of the tensor, expected to be (n_states, n_params_per_state).
-            dtype: Optional dtype of the tensor.
-            **kwargs: Additional keyword arguments.
+    Fits `pypress.clustering.GaussianMixture1D` with `n_states` components to
+    the training outputs, and returns `init_values` for `PredictiveStateMeans`
+    or `PredictiveStateParams`.
 
-        Returns:
-            Initialized tensor with logits (before activation) computed from
-            init_values using inverse activation functions.
-        """
-        return _get_predictive_state_params_init(
-            self._init_values,
-            n_states=self._n_states,
-            n_params_per_state=self._n_params_per_state,
-            activations=self._activations,
-        )
+    For multi-output y, all outputs are pooled into one 1D sample before the
+    fit, so every output unit gets the same per-state means. This is a simple
+    heuristic: it suits outputs on a common scale.
+
+    Args:
+        y: Training outputs of shape (n_samples,) or (n_samples, n_outputs).
+        n_states: Number of predictive states (mixture components).
+        return_params: If False, returns state-conditional means for
+            `PredictiveStateMeans`. If True, returns [mean, std] per state for
+            `PredictiveStateParams` with a Gaussian parameterization.
+        max_iter: Maximum number of EM iterations. Default is 10.
+
+    Returns:
+        If return_params=False: array of shape (n_outputs, n_states) of the
+            mixture means, the same row for every output.
+        If return_params=True: array of shape (2, n_states); row 0 holds the
+            means and row 1 the standard deviations, for
+            `activations=["linear", "softplus"]`.
+
+    Example:
+        >>> y_train = np.random.randn(1000, 2)
+        >>> layer = PredictiveStateMeans(
+        ...     units=2, init_values=initialize_from_y(y_train, n_states=5)
+        ... )
+        >>> layer = PredictiveStateParams(
+        ...     n_params_per_state=2,
+        ...     activations=["linear", "softplus"],
+        ...     init_values=initialize_from_y(y_train, n_states=5, return_params=True),
+        ... )
+    """
+    from ..clustering import GaussianMixture1D
+
+    y = np.asarray(y.values if isinstance(y, (pd.Series, pd.DataFrame)) else y)
+    units = 1 if y.ndim == 1 else y.shape[1]
+
+    gmm = GaussianMixture1D(n_components=n_states, max_iter=max_iter)
+    gmm.fit(y.ravel())
+
+    if return_params:
+        return np.vstack([gmm.means_, gmm.covariances_])
+    return np.tile(gmm.means_, (units, 1))
