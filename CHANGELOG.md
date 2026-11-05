@@ -5,6 +5,33 @@ All notable changes `pypress` will be documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## pypress v0.5.4 - Nov 5, 2026
+
+No library changes: the demo notebook and development setup only.
+
+### Changed
+
+* `notebooks/demo.ipynb` runs end to end on the current release, with fresh
+  outputs.
+  * The digits example uses 12 states and shows, per predictive state, its share,
+    its distribution over digits, and its average image (94% validation
+    accuracy, was about 40%).
+  * The housing example reports per-state feature means on the original scale,
+    with the observed house value.
+  * The final `PRESS()` example uses the recommended regularizers.
+
+### Fixed
+
+* Notebook bugs that gave wrong results without an error: the scaling helper
+  returned unscaled data, the digits accuracy metric expected one-hot labels,
+  the housing feature names were wrong, and `agg_data_by_state` got its
+  arguments reversed.
+
+### Added
+
+* `jupyter` as a development dependency, so `poetry run jupyter nbconvert
+  --execute` works.
+
 ## pypress v0.5.3 - Nov 5, 2026
 
 ### Fixed
