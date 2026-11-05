@@ -31,8 +31,9 @@ def _walk(obj, seen):
         for item in obj.values():
             yield from _walk(item, seen)
         return
-    # Regularizers hold their scalars (and nested regularizers) as attributes.
-    if isinstance(obj, tf.keras.regularizers.Regularizer):
+    # Regularizers hold their scalars (and nested regularizers) as attributes, and
+    # a custom loss can hold regularizers the same way.
+    if isinstance(obj, (tf.keras.regularizers.Regularizer, tf.keras.losses.Loss)):
         for item in vars(obj).values():
             yield from _walk(item, seen)
 
@@ -42,7 +43,8 @@ def collect_scheduled_values(model: tf.keras.Model) -> list[ScheduledValue]:
 
     Walks all layers (recursing into nested layers such as `PRESS`) and inspects
     their regularizer attributes, descending through container regularizers like
-    `CombinedRegularizer` and `UniformAndDegreesOfFreedomRegularizer`.
+    `CombinedRegularizer` and `UniformAndDegreesOfFreedomRegularizer`. Also walks
+    the compiled loss, for regularizers held by a custom `tf.keras.losses.Loss`.
 
     Args:
       model: The Keras model to inspect.
@@ -85,6 +87,7 @@ def collect_scheduled_values(model: tf.keras.Model) -> list[ScheduledValue]:
 
     for layer in model.layers:
         visit_layer(layer)
+    found.extend(_walk(getattr(model, "loss", None), seen))
     return found
 
 

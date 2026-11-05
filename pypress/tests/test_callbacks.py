@@ -49,6 +49,38 @@ def test_collect_finds_values_through_nested_layers_and_containers():
     assert {id(v) for v in found} == {id(dof_l2), id(dof_target)}
 
 
+class _PenalizedMSE(tf.keras.losses.Loss):
+    """MSE plus a regularizer on the predictions, held as a loss attribute."""
+
+    def __init__(self, regularizer):
+        """Stores 'regularizer'."""
+        super().__init__()
+        self.regularizer = regularizer
+
+    def call(self, y_true, y_pred):
+        """Per-unit squared error plus the batch penalty."""
+        probs = tf.nn.softmax(tf.concat([y_pred, -y_pred], axis=1))
+        return tf.reduce_mean((y_true - y_pred) ** 2, axis=1) + self.regularizer(probs)
+
+
+def test_scheduler_advances_values_in_a_loss_regularizer():
+    """A regularizer held by a custom loss, not a layer, is found and scheduled."""
+    l2 = ScheduledValue(start=0.0, end=1.0, duration_epochs=4)
+    model = _press_model(Uniform(l2=0.1))
+    model.compile(optimizer="adam", loss=_PenalizedMSE(DegreesOfFreedom(l2=l2)))
+    assert [id(v) for v in collect_scheduled_values(model)] == [id(l2)]
+
+    X, y = _data()
+    model.fit(
+        X, y, epochs=1, batch_size=64, verbose=0, callbacks=[RegularizerScheduler()]
+    )
+    np.testing.assert_allclose(float(l2.variable), 0.0)
+    model.fit(
+        X, y, epochs=5, batch_size=64, verbose=0, callbacks=[RegularizerScheduler()]
+    )
+    np.testing.assert_allclose(float(l2.variable), 1.0)
+
+
 def test_collect_returns_empty_when_nothing_is_scheduled():
     """Plain float regularizers yield no scheduled values."""
     assert collect_scheduled_values(_press_model(Uniform(l2=0.1))) == []
