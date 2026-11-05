@@ -1,38 +1,19 @@
 """Module for PRESS layers."""
 
-from typing import Any, Dict, List, Optional, Union, Sequence
+from typing import Any, Dict, Optional, Union
 
 import numpy as np
 import tensorflow as tf
 
+from . import activations as pr_act
 from . import initializers as pr_init
-
-
-ActivationSpec = Union[
-    str,
-    tf.keras.layers.Layer,
-    Sequence[Union[str, tf.keras.layers.Layer]],
-]
-
-
-def _init_values_to_config(
-    init_values: Optional[Union[float, np.ndarray]],
-) -> Optional[Union[float, list]]:
-    """Converts `init_values` to a JSON-safe form for `get_config()`.
-
-    A bare `np.ndarray` isn't JSON-serializable; Keras's `.keras` save format
-    mangles it into a `TrackedDict` on load, breaking the `isinstance(...,
-    np.ndarray)` checks in `initializers.py`. Convert to a list instead,
-    paired with `_init_values_from_config` on the receiving end. `None` and
-    scalars are already JSON-safe and pass through unchanged.
-    """
-    return init_values.tolist() if isinstance(init_values, np.ndarray) else init_values
+from .activations import ActivationSpec
 
 
 def _init_values_from_config(
     init_values: Optional[Union[float, list]],
 ) -> Optional[Union[float, np.ndarray]]:
-    """Inverse of `_init_values_to_config`."""
+    """Restores array-valued `init_values` from their JSON list form."""
     return (
         np.array(init_values) if isinstance(init_values, (list, tuple)) else init_values
     )
@@ -101,179 +82,189 @@ class PredictiveStateSimplex(tf.keras.layers.Dense):
         return config
 
 
+class _StateConditionalTable(tf.keras.layers.Layer):
+    """Base layer holding a K x P table of state-conditional parameters.
+
+    The table is learned as logits; an activation maps them to the original
+    scale. A single activation applies to the whole table (so "softmax" normalizes
+    across the columns of each state); a sequence gives one activation per
+    column. `init_values` are on the original scale and are inverted through the
+    activations; they take the forms described in `pypress.keras.initializers`.
+
+    Subclasses decide what to do with the table: `PredictiveStateMeans` mixes it
+    with the predictive state weights, `PredictiveStateParams` broadcasts it.
+    The number of states K is inferred from the input at build time.
+    """
+
+    # Weight name and the config key of the activations, set by subclasses.
+    _WEIGHT_NAME = "state_conditional_logits"
+    _ACTIVATION_KEY = "activations"
+
+    def __init__(
+        self,
+        n_columns: int,
+        activations: ActivationSpec,
+        init_values: Optional[pr_init.InitValues],
+        **kwargs,
+    ):
+        """Initializes the table.
+
+        Raises:
+          ValueError: if a sequence of activations does not have one per column,
+            or 'init_values' is given with an activation that has no known
+            inverse.
+        """
+        super().__init__(**kwargs)
+        self._n_columns = int(n_columns)
+        self._activations = pr_act.deserialize(activations)
+        self._init_values = _init_values_from_config(init_values)
+        self._n_states = None
+        self._logits = None
+
+        self._per_column = not pr_act.is_single(self._activations)
+        if self._per_column:
+            columns = list(self._activations)
+            if len(columns) != self._n_columns:
+                raise ValueError(
+                    f"A sequence of activations needs one per column "
+                    f"({self._n_columns}). Got {len(columns)}."
+                )
+            self._activation_layers = [pr_act.to_layer(a) for a in columns]
+        else:
+            self._activation_layers = [pr_act.to_layer(self._activations)]
+
+        if self._init_values is not None:
+            # Fail at construction rather than at the first call.
+            pr_act.names(self._activations, self._n_columns)
+
+    def build(self, input_shape):
+        """Creates the (n_states, n_columns) logits; n_states is the last input axis."""
+        self._n_states = int(input_shape[-1])
+        if self._init_values is None:
+            initializer = "glorot_uniform"
+        else:
+            initializer = pr_init.StateConditionalInitializer(
+                self._init_values, pr_act.names(self._activations, self._n_columns)
+            )
+        self._logits = self.add_weight(
+            name=self._WEIGHT_NAME,
+            shape=(self._n_states, self._n_columns),
+            initializer=initializer,
+            trainable=True,
+        )
+        super().build(input_shape)
+
+    def _table(self) -> tf.Tensor:
+        """The activated table, shape (n_states, n_columns)."""
+        if not self._per_column:
+            return self._activation_layers[0](self._logits)
+        columns = tf.split(self._logits, num_or_size_splits=self._n_columns, axis=1)
+        return tf.concat(
+            [act(c) for act, c in zip(self._activation_layers, columns)], axis=1
+        )
+
+    def get_config(self) -> Dict[str, Any]:
+        """Returns the config, with activations and init_values in JSON-safe form."""
+        config = super().get_config()
+        config.update(
+            {
+                self._ACTIVATION_KEY: pr_act.serialize(self._activations),
+                "init_values": (
+                    self._init_values.tolist()
+                    if isinstance(self._init_values, np.ndarray)
+                    else self._init_values
+                ),
+            }
+        )
+        return config
+
+
 @tf.keras.utils.register_keras_serializable(package="pypress")
-class PredictiveStateMeans(tf.keras.layers.Layer):
-    """Layer that computes a weighted mixture of state-conditional means.
+class PredictiveStateMeans(_StateConditionalTable):
+    """Layer that computes a predictive mixture of state-conditional means.
 
-    This layer implements the core PRESS prediction mechanism by computing a weighted
-    sum of state-conditional means, where the weights are the predictive state
-    probabilities P(S | X) from the PredictiveStateSimplex layer.
+    The prediction is a weighted sum of state-conditional means, where the
+    weights are the predictive state weights P(S | X) from the
+    PredictiveStateSimplex layer:
 
-    Mathematical formulation:
         output = sum_{k=1}^{K} w_k(X) * mu_k
 
-    where:
-        - w_k(X) = P(S_k | X) are the predictive state probabilities (input)
-        - mu_k are the learnable state-conditional means (weights of this layer)
-        - K is the number of predictive states
-
-    The layer learns a matrix of state-conditional means of shape (n_states, units),
-    where each row k represents the mean output mu_k for state k. The input state
-    probabilities are used to compute a weighted mixture via matrix multiplication.
+    The layer learns a table of state-conditional means of shape (n_states,
+    units); row k is the mean mu_k of state k. The number of states is inferred
+    from the input.
 
     Input shape:
-        (batch_size, n_states): Predictive state probabilities P(S | X) from
-        PredictiveStateSimplex layer (softmax outputs summing to 1)
+        (batch_size, n_states): predictive state weights (rows sum to 1).
 
     Output shape:
-        (batch_size, units): Weighted mixture of state-conditional means
+        (batch_size, units)
 
     Example:
-        >>> # Create predictive state simplex and means layers
         >>> simplex = PredictiveStateSimplex(n_states=5)
         >>> means = PredictiveStateMeans(units=1, activation="linear")
-        >>>
-        >>> # Forward pass
-        >>> X = tf.random.normal((100, 10))  # batch of features
-        >>> state_probs = simplex(X)  # (100, 5)
-        >>> predictions = means(state_probs)  # (100, 1)
+        >>> predictions = means(simplex(tf.random.normal((100, 10))))  # (100, 1)
     """
+
+    _WEIGHT_NAME = "state_conditional_mean_logits"
+    _ACTIVATION_KEY = "activation"
 
     def __init__(
         self,
         units: int,
-        activation: Union[str, tf.keras.layers.Activation] = "linear",
-        init_values: Optional[Union[float, np.ndarray]] = None,
+        activation: ActivationSpec = "linear",
+        init_values: Optional[pr_init.InitValues] = None,
         **kwargs,
     ):
         """Initializes the PredictiveStateMeans layer.
 
         Args:
-            units: Number of output units (dimensionality of predictions). For scalar
-                regression, use units=1. For multi-output regression, use units > 1.
-            activation: Activation function to apply to state-conditional mean logits.
-                Can be a string (e.g., "linear", "relu", "sigmoid") or a
-                tf.keras.layers.Activation layer. Common choices:
-                - "linear": for regression (default)
-                - "sigmoid": for binary classification or bounded outputs
-                - "softmax": for multi-class classification (when units > 1)
-            init_values: Optional initialization values on original scale (after activation).
-                If None, uses default Keras initialization. Can be:
-                - A scalar: all means initialized to this value (on original scale)
-                - A 1D array of shape (units,): broadcast across all states
+            units: Number of output units. Use units=1 for scalar regression.
+            activation: Activation applied to the means: a name (e.g. "linear",
+                "sigmoid", "softmax"), a Keras activation function or layer, or a
+                sequence with one per unit. A single activation applies across
+                units, so "softmax" gives a distribution over units per state.
+            init_values: Optional initial means on the original scale (after
+                activation). If None, uses Keras's default initialization. Can be:
+                - a scalar: every mean;
+                - a 1D array of shape (units,): broadcast across states;
+                - a 2D array of shape (units, n_states): state-specific.
                 Examples:
                 - For regression: init_values=np.mean(y_train, axis=0)
-                - For classification with sigmoid: init_values=0.8 (80% probability)
+                - For classification with sigmoid: init_values=0.8
             **kwargs: Additional keyword arguments passed to Layer().
         """
-        super().__init__(**kwargs)
-        self._units = units
-        self._activation = activation
-        self._init_values = _init_values_from_config(init_values)
-
-        self._activation_layer = (
-            tf.keras.layers.Activation(self._activation)
-            if isinstance(self._activation, str)
-            else activation
-        )
-        self._state_conditional_means = None
-
-    def build(self, input_shape: List[int]):
-        """Build the layer by creating trainable state-conditional mean weights.
-
-        The weight matrix has shape (n_states, units) where each row k contains
-        the mean vector mu_k for state k.
-
-        Args:
-            input_shape: Shape of input tensor, expected to be (batch_size, n_states).
-                The n_states dimension (input_shape[1]) determines the number of
-                state-conditional means to learn.
-        """
-        input_shape = list(input_shape)
-        scm_shape = tuple(input_shape[1:] + [self._units])
-
-        # Create initializer if init_values is provided
-        if self._init_values is None:
-            initializer = None
-        else:
-            # Get activation string (required for initializer)
-            if isinstance(self._activation, str):
-                activation_str = self._activation
-            else:
-                raise ValueError(
-                    "When using init_values, activation must be a string "
-                    "(e.g., 'linear', 'sigmoid'). Custom activation layers are not "
-                    "supported with automatic initialization."
-                )
-
-            initializer = pr_init.PredictiveStateMeansInitializer(
-                init_values=self._init_values,
-                n_states=input_shape[1],
-                activation=activation_str,
-                units=self._units,
-            )
-
-        self._state_conditional_mean_logits = self.add_weight(
-            name="state_conditional_mean_logits",
-            shape=scm_shape,
-            initializer=initializer,
-            trainable=True,
+        self._units = int(units)
+        super().__init__(
+            n_columns=self._units,
+            activations=activation,
+            init_values=init_values,
+            **kwargs,
         )
 
     @property
     def state_conditional_means(self) -> tf.Tensor:
-        """Returns state-conditional means after applying activation function.
+        """State-conditional means mu_k, shape (n_states, units), after activation."""
+        return self._table()
 
-        The activation function is applied element-wise to the logits to produce
-        the final state-conditional means mu_k for k=1..K.
-
-        Returns:
-            Tensor of shape (n_states, units) containing the activated state-conditional
-            means. Each row k represents the mean output mu_k for predictive state k.
-        """
-        return self._activation_layer(self._state_conditional_mean_logits)
+    def compute_output_shape(self, input_shape):
+        """Computes the output shape, (batch_size, units)."""
+        return tuple(input_shape[:-1]) + (self._units,)
 
     def call(self, inputs: tf.Tensor) -> tf.Tensor:
-        """Forward pass: compute weighted mixture of state-conditional means.
-
-        Computes the PRESS prediction as a weighted sum:
-            output[i] = sum_{k=1}^{K} inputs[i,k] * mu_k
-
-        This is implemented efficiently via matrix multiplication:
-            output = inputs @ state_conditional_means
-
-        where:
-            - inputs[i,k] = P(S_k | X_i) are the state probabilities for sample i
-            - mu_k are the state-conditional means (rows of state_conditional_means)
+        """The predictive mixture: inputs @ state_conditional_means.
 
         Args:
-            inputs: Tensor of shape (batch_size, n_states) representing predictive
-                state probabilities P(S | X). Each row should be a probability
-                distribution (non-negative, summing to 1).
+            inputs: Predictive state weights, shape (batch_size, n_states).
 
         Returns:
-            Tensor of shape (batch_size, units) containing the predicted outputs
-            as a weighted mixture of state-conditional means.
+            Predictions, shape (batch_size, units).
         """
         return tf.matmul(inputs, self.state_conditional_means)
 
     def get_config(self) -> Dict[str, Any]:
-        """Returns the configuration of the layer for serialization.
-
-        Returns:
-            Dictionary containing the layer configuration with keys:
-            - units: Number of output units
-            - activation: Activation function specification
-            - init_values: Initial values on original scale (if provided)
-        """
+        """Returns the configuration of the layer for serialization."""
         config = super().get_config()
-        config.update(
-            {
-                "units": self._units,
-                "activation": self._activation,
-                "init_values": _init_values_to_config(self._init_values),
-            }
-        )
+        config["units"] = self._units
         return config
 
 
@@ -319,7 +310,7 @@ class PRESS(tf.keras.layers.Layer):
         self,
         units: int,
         n_states: int,
-        activation: Union[str, tf.keras.layers.Activation] = "linear",
+        activation: ActivationSpec = "linear",
         predictive_state_simplex_kwargs: Optional[Dict[str, Any]] = None,
         predictive_state_means_kwargs: Optional[Dict[str, Any]] = None,
         **kwargs,
@@ -338,7 +329,7 @@ class PRESS(tf.keras.layers.Layer):
         super().__init__(**kwargs)
         self._units = units
         self._n_states = n_states
-        self._activation = activation
+        self._activation = pr_act.deserialize(activation)
         self._predictive_state_simplex_kwargs = predictive_state_simplex_kwargs or {}
         self._predictive_state_means_kwargs = predictive_state_means_kwargs or {}
 
@@ -406,7 +397,7 @@ class PRESS(tf.keras.layers.Layer):
             {
                 "units": self._units,
                 "n_states": self._n_states,
-                "activation": self._activation,
+                "activation": pr_act.serialize(self._activation),
                 "predictive_state_means_kwargs": _serialize_kwargs(
                     self._predictive_state_means_kwargs
                 ),
@@ -428,262 +419,113 @@ class PRESS(tf.keras.layers.Layer):
 
 
 @tf.keras.utils.register_keras_serializable(package="pypress")
-class PredictiveStateParams(tf.keras.layers.Layer):
+class PredictiveStateParams(_StateConditionalTable):
     """Layer that learns state-conditional parameters independent of input features.
 
-    This layer implements state-conditional parameters theta_k for k=1..K that are
-    independent of input features X. Each state has its own set of parameters that
-    can be activated with different activation functions.
-
-    The layer learns a weight matrix of shape [K, P] where K is the number of states
-    and P is the number of parameters per state. These parameters are broadcasted
-    across the batch dimension.
-
-    Relationship to PredictiveStateMeans:
-        PredictiveStateMeans is a special case of this layer that:
-        1. Only models the mean (P=1 parameter per state for scalar outputs)
-        2. Does NOT broadcast parameters across batch - instead it computes a weighted
-           mixture: output = sum_k w_k * mu_k (i.e., it multiplies by state probabilities)
-
-        In contrast, PredictiveStateParams broadcasts the same parameter values to all
-        batch samples and can model multiple parameters per state. This is useful for:
-        - Distribution parameters (e.g., [mean, variance] or [location, scale, shape])
-        - Multiple output dimensions that need state-conditional parameters
-        - Cases where you want to access raw state parameters without mixing
+    Each predictive state k has its own parameters theta_k (P of them), learned
+    as a table of shape (n_states, n_params_per_state). Unlike
+    `PredictiveStateMeans`, which mixes its table with the predictive state
+    weights, this layer broadcasts the whole table to every observation, so a
+    downstream loss can use each state's parameters (e.g. a mixture likelihood).
 
     Use cases for distribution parameters:
-        For probabilistic models, you can use this layer to learn state-conditional
-        distribution parameters. For example:
         - Gaussian: [mu, sigma] with activations=["linear", "softplus"]
-        - Gamma: [alpha, beta] with activations=["softplus", "softplus"]
-        - Normal with fixed variance: [mu] with activations="linear"
+        - Gamma: [alpha, beta] with activations="softplus"
 
     Input shape:
-        (batch_size, n_states): Predictive state probabilities P(S | X)
+        (batch_size, n_states): predictive state weights. Only the shape is used.
 
     Output shape:
         - If flatten_output=True: (batch_size, n_states * n_params_per_state)
-          Format: [s0_p0, s1_p0, ..., sJ_p0, s0_p1, s1_p1, ..., sJ_p1, ...]
+          Format: [s0_p0, s1_p0, ..., sK_p0, s0_p1, s1_p1, ..., sK_p1, ...]
           (parameter-first ordering)
         - If flatten_output=False: (batch_size, n_states, n_params_per_state)
 
     Example:
-        >>> # Single activation for all parameters
-        >>> layer = PredictiveStateParams(n_params_per_state=2,
-        ...                                activations="softplus")
-        >>> inputs = tf.random.normal((10, 3))  # batch of state probabilities (3 states)
-        >>> outputs = layer(inputs)
-        >>> outputs.shape
-        TensorShape([10, 6])  # flattened: 3 states * 2 params
-
-        >>> # Different activations per parameter
         >>> layer = PredictiveStateParams(n_params_per_state=2,
         ...                                activations=["linear", "softplus"],
+        ...                                init_values=[0.0, 1.0],
         ...                                flatten_output=False)
-        >>> outputs = layer(inputs)
-        >>> outputs.shape
-        TensorShape([10, 3, 2])  # not flattened (3 states, 2 params)
+        >>> layer(tf.random.normal((10, 3))).shape
+        TensorShape([10, 3, 2])
     """
+
+    _WEIGHT_NAME = "state_conditional_params_logits"
+    _ACTIVATION_KEY = "activations"
 
     def __init__(
         self,
         n_params_per_state: int,
         activations: ActivationSpec = "linear",
         flatten_output: bool = True,
-        init_values: Optional[Sequence[Union[float, np.ndarray]]] = None,
+        init_values: Optional[pr_init.InitValues] = None,
         **kwargs,
     ):
         """Initializes the PredictiveStateParams layer.
 
         Args:
             n_params_per_state: Number of parameters per state (P). Must be >= 1.
-            activations: Activation function(s) to apply to parameters. Can be:
-                - A string (e.g., "linear", "relu", "softplus"): same activation for all parameters
-                - A tf.keras.layers.Layer: custom activation layer for all parameters
-                - A sequence of strings/layers: one activation per parameter
-                  (length must equal n_params_per_state)
-            flatten_output: If True, output shape is (batch_size, n_states * n_params_per_state)
-                with parameter-first ordering. If False, output shape is
+            activations: Activation(s) applied to the parameters: a name, a Keras
+                activation function or layer for all of them, or a sequence with
+                one per parameter.
+            flatten_output: If True, output shape is (batch_size, n_states *
+                n_params_per_state) with parameter-first ordering. If False,
                 (batch_size, n_states, n_params_per_state).
-            init_values: Optional sequence of initial values on original scale (after activation).
-                Must be a list/array of length n_params_per_state, one value per parameter.
-                Each element can be a scalar. If None, uses "glorot_uniform" initialization.
-                Examples:
-                - For Gaussian [mean, std]: init_values=[0.0, 1.0]
-                - For Beta [alpha, beta]: init_values=[2.0, 2.0]
+            init_values: Optional initial values on the original scale (after
+                activation). If None, uses "glorot_uniform". Can be:
+                - a scalar: every parameter of every state;
+                - a 1D array of shape (n_params_per_state,): broadcast across
+                  states, e.g. [0.0, 1.0] for a Gaussian [mean, std];
+                - a 2D array of shape (n_params_per_state, n_states):
+                  state-specific, e.g. from `initialize_from_y(...,
+                  return_params=True)`.
             **kwargs: Additional keyword arguments passed to Layer().
-
-        Note:
-            The number of states (n_states) is automatically inferred from the input
-            shape during the build() call, similar to PredictiveStateMeans layer.
         """
-        super().__init__(**kwargs)
-        self._n_states = None  # Will be inferred from input_shape in build()
-        self._n_params_per_state = int(n_params_per_state)
-        self._activations = activations
-        self._flatten_output = bool(flatten_output)
-        self._init_values = _init_values_from_config(init_values)
-
-        # Build activation layers now (no weights needed)
-        self._activation_layers = self._make_activation_layers(
-            activations=self._activations, n_params=self._n_params_per_state
-        )
-
-        self._theta_logits = None  # [K, P]
-
-    @staticmethod
-    def _make_activation_layers(
-        activations: ActivationSpec, n_params: int
-    ) -> list[tf.keras.layers.Layer]:
-        """Create activation layers for each parameter.
-
-        Args:
-            activations: Activation specification (string, layer, or sequence of these).
-            n_params: Number of parameters (required length if activations is a sequence).
-
-        Returns:
-            List of tf.keras.layers.Layer objects, one per parameter.
-
-        Raises:
-            ValueError: If activations is a sequence with length != n_params.
-        """
-
-        def to_layer(a: Union[str, tf.keras.layers.Layer]) -> tf.keras.layers.Layer:
-            return tf.keras.layers.Activation(a) if isinstance(a, str) else a
-
-        if isinstance(activations, (str, tf.keras.layers.Layer)):
-            layer = to_layer(activations)
-            return [layer for _ in range(n_params)]
-
-        # Sequence case
-        acts = list(activations)
-        if len(acts) != n_params:
+        if int(n_params_per_state) < 1:
             raise ValueError(
-                f"If activation is a list/sequence, it must have length n_params_per_state={n_params}, "
-                f"got len(activation)={len(acts)}."
+                f"'n_params_per_state' must be >= 1. Got {n_params_per_state}."
             )
-        return [to_layer(a) for a in acts]
-
-    def build(self, input_shape):
-        """Build the layer by creating trainable weights.
-
-        Infers n_states from input_shape[1] and creates the state-conditional
-        parameter logits with shape (n_states, n_params_per_state).
-
-        Args:
-            input_shape: Shape of input tensor, expected to be (batch_size, n_states).
-                The n_states dimension (input_shape[1]) determines the number of
-                state-conditional parameters to learn.
-        """
-        input_shape = list(input_shape)
-        self._n_states = input_shape[1]  # Infer n_states from input
-
-        # Create initializer if init_values is provided
-        if self._init_values is not None:
-            # Get activation strings (required for initializer)
-            activation_strs = []
-            if isinstance(self._activations, str):
-                activation_strs = [self._activations] * self._n_params_per_state
-            elif isinstance(self._activations, tf.keras.layers.Layer):
-                raise ValueError(
-                    "When using init_values, activations must be strings. "
-                    "Custom activation layers are not supported with automatic initialization."
-                )
-            else:
-                # Sequence of activations
-                for act in self._activations:
-                    if isinstance(act, str):
-                        activation_strs.append(act)
-                    else:
-                        raise ValueError(
-                            "When using init_values, all activations must be strings. "
-                            "Custom activation layers are not supported."
-                        )
-
-            init = pr_init.PredictiveStateParamsInitializer(
-                init_values=self._init_values,
-                n_states=self._n_states,
-                activations=activation_strs,
-            )
-        else:
-            init = "glorot_uniform"
-
-        self._theta_logits = self.add_weight(
-            name="state_conditional_params_logits",
-            shape=(self._n_states, self._n_params_per_state),
-            initializer=init,
-            trainable=True,
+        self._n_params_per_state = int(n_params_per_state)
+        self._flatten_output = bool(flatten_output)
+        super().__init__(
+            n_columns=self._n_params_per_state,
+            activations=activations,
+            init_values=init_values,
+            **kwargs,
         )
-        super().build(input_shape)
 
     @property
     def state_conditional_params(self) -> tf.Tensor:
-        """Returns state-conditional parameters after applying activations.
-
-        Each parameter can have its own activation function. The logits are split
-        by parameter, activated individually, then concatenated back together.
-
-        Returns:
-            Tensor of shape (n_states, n_params_per_state) containing the activated
-            state-conditional parameters theta_k for each state k and parameter p.
-        """
-        logits = self._theta_logits  # [K,P]
-        cols = tf.split(
-            logits, num_or_size_splits=self._n_params_per_state, axis=1
-        )  # list of [K,1]
-        activated = [
-            act(c) for act, c in zip(self._activation_layers, cols)
-        ]  # list of [K,1]
-        return tf.concat(activated, axis=1)
+        """State-conditional parameters, shape (n_states, n_params_per_state)."""
+        return self._table()
 
     def compute_output_shape(self, input_shape):
-        """Compute the output shape of the layer.
-
-        Args:
-            input_shape: Shape of input tensor (batch_size, n_states).
-
-        Returns:
-            Output shape tuple:
-            - If flatten_output=True: (batch_size, n_states * n_params_per_state)
-            - If flatten_output=False: (batch_size, n_states, n_params_per_state)
-        """
-        # input_shape is (batch_size, n_states)
+        """Computes the output shape; n_states is read from the input shape."""
+        n_states = input_shape[-1]
         if self._flatten_output:
-            return (input_shape[0], self._n_states * self._n_params_per_state)
-        return (input_shape[0], self._n_states, self._n_params_per_state)
+            flat = None if n_states is None else n_states * self._n_params_per_state
+            return (input_shape[0], flat)
+        return (input_shape[0], n_states, self._n_params_per_state)
 
     def call(self, inputs: tf.Tensor) -> tf.Tensor:
-        """Forward pass: broadcast state-conditional parameters across batch.
-
-        The state-conditional parameters are independent of the input features X,
-        so the same parameter values are returned for each batch sample. The inputs
-        are only used to determine the batch size for broadcasting.
+        """Broadcasts the state-conditional parameters across the batch.
 
         Args:
-            inputs: Tensor of shape (batch_size, n_states) representing state
-                probabilities P(S | X). Only used for batch size; values are not used.
+            inputs: Predictive state weights, shape (batch_size, n_states). Only
+                the batch size is used.
 
         Returns:
-            Tensor of state-conditional parameters:
-            - If flatten_output=True: shape (batch_size, n_states * n_params_per_state)
-              with parameter-first ordering: [s0_p0, s1_p0, ..., sJ_p0, s0_p1, ...]
-            - If flatten_output=False: shape (batch_size, n_states, n_params_per_state)
+            - If flatten_output=True: shape (batch_size, n_states *
+              n_params_per_state), parameter-first: [s0_p0, s1_p0, ..., s0_p1, ...]
+            - If flatten_output=False: shape (batch_size, n_states,
+              n_params_per_state)
         """
-        # Get theta: [K, P]
-        theta = self.state_conditional_params
-
-        # Broadcast to [N, K, P] without explicitly fetching batch_size
-        # inputs * 0 is a trick to get a tensor of [N, K] with zeros
-        # then we expand dims and add theta
-        theta = tf.expand_dims(theta, axis=0)  # [1, K, P]
-
-        # This effectively broadcasts theta across the batch dimension of inputs
+        theta = tf.expand_dims(self.state_conditional_params, axis=0)  # [1, K, P]
+        # Adding zeros shaped like the input broadcasts theta to [N, K, P].
         theta = tf.zeros_like(tf.expand_dims(inputs, axis=-1)) + theta
 
         if self._flatten_output:
-            # Flatten with parameter-first ordering: transpose (batch, states, params)
-            # to (batch, params, states), then reshape to (batch, states * params)
-            # This gives [s0_p0, s1_p0, ..., sJ_p0, s0_p1, s1_p1, ..., sJ_p1, ...]
+            # (batch, states, params) -> (batch, params, states) -> flat
             theta = tf.transpose(theta, [0, 2, 1])
             theta = tf.reshape(theta, [-1, self._n_states * self._n_params_per_state])
 
@@ -692,23 +534,12 @@ class PredictiveStateParams(tf.keras.layers.Layer):
     def get_config(self) -> Dict[str, Any]:
         """Returns the configuration of the layer for serialization.
 
-        Returns:
-            Dictionary containing the layer configuration with keys:
-            - n_params_per_state: Number of parameters per state
-            - activations: Activation specification
-            - flatten_output: Whether output is flattened
-            - init_logits: Initial logits (if provided)
-
         Note:
             n_states is not included in config as it's inferred from input shape.
         """
         config = super().get_config()
         config.update(
-            dict(
-                n_params_per_state=self._n_params_per_state,
-                activations=self._activations,
-                flatten_output=self._flatten_output,
-                init_values=_init_values_to_config(self._init_values),
-            )
+            n_params_per_state=self._n_params_per_state,
+            flatten_output=self._flatten_output,
         )
         return config

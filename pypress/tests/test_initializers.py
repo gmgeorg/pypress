@@ -2,12 +2,10 @@ import numpy as np
 import pytest
 import tensorflow as tf
 
-# Import your module and functions.
-# Adjust the import paths as necessary.
 from pypress.keras.initializers import (
     PredictiveStateMeansInitializer,
     PredictiveStateParamsInitializer,
-    _get_predictive_state_means_init,
+    state_conditional_logits,
 )
 from pypress.keras.activations import get_inverse_activation
 
@@ -122,7 +120,7 @@ def test_get_inverse_activation_selu():
     np.testing.assert_allclose(values.numpy(), values_recovered.numpy(), rtol=1e-5)
 
 
-def test_get_predictive_state_means_init_with_float():
+def test_state_conditional_logits_with_float():
     """Test that a float init_values returns the expected tensor with linear activation."""
     init_values = 0.5
     n_states = 3
@@ -130,14 +128,11 @@ def test_get_predictive_state_means_init_with_float():
     # With linear activation, logits should equal init_values
     # Shape should be (n_states, units)
     expected = np.ones((n_states, units)) * init_values
-    result = _get_predictive_state_means_init(
-        init_values, n_states, units, activation="linear"
-    )
+    result = state_conditional_logits(init_values, n_states, units, "linear")
     np.testing.assert_allclose(result.numpy(), expected)
-    assert isinstance(result, tf.Variable)
 
 
-def test_get_predictive_state_means_init_with_1d_array():
+def test_state_conditional_logits_with_1d_array():
     """Test that a 1D numpy array works correctly with linear activation."""
     units = 4
     n_states = 3
@@ -145,13 +140,11 @@ def test_get_predictive_state_means_init_with_1d_array():
     # With linear activation, logits should equal init_values
     # Shape should be (n_states, units)
     expected = np.ones((n_states, units)) * init_values[np.newaxis, :]
-    result = _get_predictive_state_means_init(
-        init_values, n_states, units, activation="linear"
-    )
+    result = state_conditional_logits(init_values, n_states, units, "linear")
     np.testing.assert_allclose(result.numpy(), expected)
 
 
-def test_get_predictive_state_means_init_with_2d_array():
+def test_state_conditional_logits_with_2d_array():
     """Test that a 2D array with shape (units, n_states) works correctly."""
     units = 4
     n_states = 3
@@ -167,22 +160,17 @@ def test_get_predictive_state_means_init_with_2d_array():
 
     # With linear activation, logits should be transposed from (units, n_states) to (n_states, units)
     expected = init_values.T  # Shape: (3, 4)
-    result = _get_predictive_state_means_init(
-        init_values, n_states, units, activation="linear"
-    )
+    result = state_conditional_logits(init_values, n_states, units, "linear")
     np.testing.assert_allclose(result.numpy(), expected)
-    assert isinstance(result, tf.Variable)
 
 
-def test_get_predictive_state_means_init_invalid_type():
+def test_state_conditional_logits_invalid_type():
     """Test that an invalid type for init_values raises a ValueError."""
     units = 4
     n_states = 3
     init_values = "not a valid type"
-    with pytest.raises(ValueError, match="must be float or np.ndarray"):
-        _get_predictive_state_means_init(
-            init_values, n_states, units, activation="linear"
-        )
+    with pytest.raises(ValueError, match="must be a number or an array"):
+        state_conditional_logits(init_values, n_states, units, "linear")
 
 
 def test_predictive_state_means_initializer_class_with_float():
@@ -475,7 +463,7 @@ def test_predictive_state_params_initializer_state_specific_gaussian():
     target_logits = tf.stack([target_means, target_std_logits], axis=1)
 
     # Set the layer's weights
-    layer._theta_logits.assign(target_logits)
+    layer._logits.assign(target_logits)
 
     # Now get the layer's output parameters (should be on original scale)
     output_params = layer.state_conditional_params
@@ -533,7 +521,6 @@ def test_predictive_state_params_with_gmm_initialization():
     4. Verify layer parameters match GMM cluster parameters
     """
     from pypress.keras.layers import PredictiveStateParams
-    from pypress.keras.initializers import _get_predictive_state_params_init
 
     # Simulate GMM output: state-specific means and stds for 5 states
     # These values are based on the user's example
@@ -546,12 +533,12 @@ def test_predictive_state_params_with_gmm_initialization():
     n_params_per_state = 2
     activations = ["linear", "softplus"]  # mean: linear, std: softplus
 
-    # Test 1: Direct call to _get_predictive_state_params_init with 2D array
+    # Test 1: Direct call to state_conditional_logits with a 2D array
     # Shape: (n_params_per_state, n_states) = (2, 5)
     init_values_gmm = np.vstack([gmm_means, gmm_stds])
     assert init_values_gmm.shape == (n_params_per_state, n_states)
 
-    logits = _get_predictive_state_params_init(
+    logits = state_conditional_logits(
         init_values_gmm, n_states, n_params_per_state, activations
     )
 

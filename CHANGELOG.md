@@ -7,6 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+* `pypress.analysis.degrees_of_freedom(weights)`: trace(H) in numpy, without
+  forming the O(n^2) smoother matrix.
+
+### Changed
+
+* `PredictiveStateMeans` and `PredictiveStateParams` share one table of
+  state-conditional parameters, so both accept the same `init_values` forms (a
+  scalar, one value per column, or a `(P, K)` array) and the same activations
+  (a name, a Keras function or `Activation` layer, or one per column).
+  Initializing through an `Activation` layer or function now works when it has
+  a known inverse.
+
+* A single activation on `PredictiveStateParams` now applies to the whole
+  table, as it does for `PredictiveStateMeans`. This only changes non-elementwise
+  activations: a single `"softmax"` now normalizes across the parameters of each
+  state, where it used to return 1 for every parameter.
+
+* `pypress.utils` is split by what calls it. Post-hoc analysis is in
+  `pypress.analysis` (`state_size`, `col_normalize`, `smoother_matrix`,
+  `agg_data_by_state`). `safe_log`/`safe_xlogx` are in
+  `pypress.keras.statistics`, and `initialize_from_y` is in
+  `pypress.keras.initializers`. The old `pypress.utils` names still work.
+
+* The `PredictiveStateMeansInitializer` and `PredictiveStateParamsInitializer`
+  classes are now thin subclasses of `StateConditionalInitializer`, with
+  `get_config()`. They take the number of states from the weight shape.
+
+### Deprecated
+
+* `pypress.utils.tf_state_size`, `tf_col_normalize`, `tr_kernel_terms` and
+  `tr_kernel`: use `pypress.keras.statistics` (in-graph) or
+  `pypress.analysis.degrees_of_freedom` (numpy).
+
+### Fixed
+
+* `PredictiveStateParams(init_values=[0.0, 1.0])` (one value per parameter)
+  raised `ValueError`, although it was documented.
+
+* `PredictiveStateParams.compute_output_shape` raised `TypeError` before the
+  layer was built.
+
+* An `Activation` layer object passed to `PRESS`, `PredictiveStateMeans` or
+  `PredictiveStateParams` made the config non-JSON-serializable, so the model
+  could not be saved.
+
+* Wrong-shaped `init_values` for `PredictiveStateMeans` raised `AssertionError`;
+  it is now a `ValueError`, as for `PredictiveStateParams`.
+
+* `initialize_from_y` docstring described multi-output y wrongly: all outputs
+  are pooled into one fit, and every output gets the same per-state means.
+
+## pypress v0.4.0 - Nov 5, 2026
+
 ### Changed
 
 * Regularizers are now one pipeline: a named population statistic
@@ -14,45 +69,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   penalty function. Scalar settings are declared once as `Hyperparameter`s
   (`pypress.keras.hyperparameters`), which own validation (over the whole
   schedule), in-graph reading and serialization.
+
 * `get_config()` of every regularizer now emits all of its settings, using
   `None` for unset optional ones.
+
 * `ScheduledValue` computes its value in-graph from one shared training clock
   (`schedules.training_clock()`). `RegularizerScheduler` advances only that
   clock, so a scheduled value held anywhere — a layer, a custom loss, a
   closure — is driven without being discovered. The clock is restored when
   `fit` ends.
+
 * `CombinedRegularizer` takes regularizer instances and serializes each child
   through Keras.
+
 * Invalid hyperparameters raise `ValueError` (previously `AssertionError` for
   `DegreesOfFreedom.target`). `TargetEntropy.target` must be >= 0 and `l2` >= 0.
-
-### Fixed
-
-* `ema_decay` averages only advance on training batches; `evaluate` and
-  `predict` no longer contaminate them.
-* `ema_decay` state is tracked by the layer it regularizes, so it appears in
-  `model.variables` and is saved and checkpointed. Models saved before this
-  load with fresh averages.
-* Applying one smoothed regularizer to two layers raises a clear `ValueError`
-  instead of crashing on a shape mismatch, or silently mixing statistics when
-  the shapes agree.
-* `CombinedRegularizer.get_config()` with a `ScheduledValue` in a child is now
-  JSON-serializable.
-* `UniformAndDegreesOfFreedomRegularizer.from_config` no longer leaves raw
-  config dicts in its attributes.
-* `RegularizerScheduler` docstring said unscheduled values stay at `start`;
-  they read `end`.
 
 ### Deprecated
 
 * `CombinedRegularizer` with `(class, kwargs)` tuples (and the
   `regularizer_tuples=` keyword). Configs in the old format still load.
+
 * `UniformAndDegreesOfFreedomRegularizer`: use
   `CombinedRegularizer([Uniform(...), DegreesOfFreedom(...)])`.
+
 * `ScheduledValue.variable`, `.assign_epoch()`, `.was_scheduled`: use
   `.value()`, `schedules.set_epoch()`, `schedules.current_epoch()`.
+
 * `callbacks.collect_scheduled_values` and
   `RegularizerScheduler.scheduled_values`.
+
 * `DegreesOfFreedom(df=...)` now warns with `DeprecationWarning` (was
   `UserWarning`).
 
@@ -60,6 +106,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 * `RegularizerScheduler` no longer warns when a model has no `ScheduledValue`,
   since it no longer searches the model.
+
+### Fixed
+
+* `ema_decay` averages only advance on training batches; `evaluate` and
+  `predict` no longer contaminate them.
+
+* `ema_decay` state is tracked by the layer it regularizes, so it appears in
+  `model.variables` and is saved and checkpointed. Models saved before this
+  load with fresh averages.
+
+* Applying one smoothed regularizer to two layers raises a clear `ValueError`
+  instead of crashing on a shape mismatch, or silently mixing statistics when
+  the shapes agree.
+
+* `CombinedRegularizer.get_config()` with a `ScheduledValue` in a child is now
+  JSON-serializable.
+
+* `UniformAndDegreesOfFreedomRegularizer.from_config` no longer leaves raw
+  config dicts in its attributes.
+
+* `RegularizerScheduler` docstring said unscheduled values stay at `start`;
+  they read `end`.
 
 ## pypress v0.3.0 - Aug 29, 2026
 

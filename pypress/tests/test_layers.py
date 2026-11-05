@@ -253,7 +253,7 @@ class TestPredictiveStateParams:
         )
         # Use same weights
         layer_unflat.build((None, n_states))
-        layer_unflat._theta_logits.assign(layer._theta_logits)
+        layer_unflat._logits.assign(layer._logits)
         outputs_unflat = layer_unflat(inputs)
 
         # Check interleaved format: [s0_p0, s1_p0, s2_p0, s0_p1, s1_p1, s2_p1]
@@ -412,7 +412,7 @@ def test_predictive_state_params_various_activations(activations):
 
 def test_predictive_state_params_activation_length_mismatch():
     """Test that mismatched activation list length raises error."""
-    with pytest.raises(ValueError, match="must have length n_params_per_state"):
+    with pytest.raises(ValueError, match="one per column"):
         _ = layers.PredictiveStateParams(
             n_params_per_state=2,
             activations=["relu", "softplus", "linear"],  # 3 activations for 2 params
@@ -485,7 +485,7 @@ def test_predictive_state_params_multiple_classification_params():
         flatten_output=True,
     )
     layer_flat.build((None, n_states))
-    layer_flat._theta_logits.assign(layer._theta_logits)
+    layer_flat._logits.assign(layer._logits)
     outputs_flat = layer_flat(inputs)
 
     # Flattened shape should be [batch, n_states * n_params]
@@ -692,3 +692,150 @@ def test_press_model_save_and_reload_round_trip(tmp_path):
     np.testing.assert_allclose(reloaded.predict(feats, verbose=0), expected, atol=1e-5)
     reg = reloaded.layers[0].predictive_state_simplex.activity_regularizer
     assert isinstance(reg, regularizers.MinStateSize)
+
+
+# --- The shared table of state-conditional parameters behind Means and Params ---
+
+N_STATES, N_COLUMNS = 3, 2
+STATE_SPECIFIC = np.array([[0.1, 0.5, 0.9], [0.2, 0.4, 0.6]])  # (P, K)
+
+
+def _table_layer(kind, **kwargs):
+    """A Means or Params layer with a (N_STATES, N_COLUMNS) table."""
+    if kind == "means":
+        return layers.PredictiveStateMeans(units=N_COLUMNS, **kwargs)
+    return layers.PredictiveStateParams(n_params_per_state=N_COLUMNS, **kwargs)
+
+
+def _table(layer):
+    """The activated table of either layer."""
+    if isinstance(layer, layers.PredictiveStateMeans):
+        return layer.state_conditional_means
+    return layer.state_conditional_params
+
+
+@pytest.mark.parametrize("kind", ["means", "params"])
+@pytest.mark.parametrize(
+    "init_values, expected",
+    [
+        (0.3, np.full((N_STATES, N_COLUMNS), 0.3)),
+        ([0.2, 0.7], np.tile([0.2, 0.7], (N_STATES, 1))),
+        (np.array([0.2, 0.7]), np.tile([0.2, 0.7], (N_STATES, 1))),
+        (STATE_SPECIFIC, STATE_SPECIFIC.T),
+        (STATE_SPECIFIC.tolist(), STATE_SPECIFIC.T),
+    ],
+    ids=["scalar", "list_per_column", "array_per_column", "2d", "2d_list"],
+)
+@pytest.mark.parametrize(
+    "activation",
+    ["sigmoid", tf.keras.activations.sigmoid, tf.keras.layers.Activation("sigmoid")],
+    ids=["name", "function", "layer"],
+)
+def test_init_values_forms_are_the_same_for_both_layers(
+    kind, init_values, expected, activation
+):
+    """Both layers accept every init_values form, inverted through any activation.
+
+    The per-column list form used to fail for PredictiveStateParams, although its
+    docstring documented it.
+    """
+    key = "activation" if kind == "means" else "activations"
+    layer = _table_layer(kind, init_values=init_values, **{key: activation})
+    layer(tf.ones((4, N_STATES)) / N_STATES)
+    np.testing.assert_allclose(_table(layer).numpy(), expected, rtol=1e-5)
+
+
+@pytest.mark.parametrize("kind", ["means", "params"])
+@pytest.mark.parametrize(
+    "init_values, match",
+    [
+        ([0.1, 0.2, 0.3], "one value per column"),
+        (np.zeros((N_STATES, N_COLUMNS)), "must have shape"),
+        ("0.5", "must be a number or an array"),
+    ],
+    ids=["wrong_length", "transposed", "string"],
+)
+def test_bad_init_values_raise_the_same_error_for_both_layers(kind, init_values, match):
+    """Shape mismatches are reported by the shared table, not per layer."""
+    layer = _table_layer(kind, init_values=init_values)
+    with pytest.raises(ValueError, match=match):
+        layer(tf.ones((4, N_STATES)))
+
+
+@pytest.mark.parametrize("kind", ["means", "params"])
+def test_init_values_with_a_non_invertible_activation_fail_at_construction(kind):
+    """A custom activation layer has no known inverse: fail before the first call."""
+    key = "activation" if kind == "means" else "activations"
+    custom = tf.keras.layers.Lambda(lambda x: x * 2.0)
+    with pytest.raises(ValueError, match="invertible"):
+        _table_layer(kind, init_values=0.5, **{key: custom})
+
+
+@pytest.mark.parametrize("kind", ["means", "params"])
+def test_per_column_activations_for_both_layers(kind):
+    """A sequence gives one activation per column, for Means too."""
+    key = "activation" if kind == "means" else "activations"
+    layer = _table_layer(kind, init_values=[-2.0, 3.0], **{key: ["linear", "softplus"]})
+    layer(tf.ones((4, N_STATES)))
+    np.testing.assert_allclose(
+        _table(layer).numpy(), np.tile([-2.0, 3.0], (N_STATES, 1)), rtol=1e-5
+    )
+
+
+def test_single_softmax_activation_normalizes_across_columns():
+    """One activation applies to the whole table: softmax gives a distribution per state."""
+    layer = layers.PredictiveStateParams(n_params_per_state=3, activations="softmax")
+    layer(tf.ones((2, N_STATES)))
+    np.testing.assert_allclose(
+        layer.state_conditional_params.numpy().sum(axis=1), 1.0, rtol=1e-5
+    )
+
+
+def test_params_compute_output_shape_before_build():
+    """compute_output_shape reads K from the input shape; it used to need build()."""
+    flat = layers.PredictiveStateParams(n_params_per_state=2)
+    assert flat.compute_output_shape((None, 3)) == (None, 6)
+    nested = layers.PredictiveStateParams(n_params_per_state=2, flatten_output=False)
+    assert nested.compute_output_shape((None, 3)) == (None, 3, 2)
+
+
+ACTIVATION_OBJECTS = [
+    tf.keras.layers.Activation("sigmoid"),
+    tf.keras.activations.sigmoid,
+]
+
+
+@pytest.mark.parametrize("activation", ACTIVATION_OBJECTS, ids=["layer", "function"])
+def test_activation_objects_serialize_to_json(activation):
+    """Activation objects in Means, Params and PRESS configs survive JSON.
+
+    An Activation layer object used to leak into get_config() as a live object.
+    """
+    made = [
+        layers.PredictiveStateMeans(units=1, activation=activation),
+        layers.PredictiveStateParams(
+            n_params_per_state=2, activations=[activation, "linear"]
+        ),
+        layers.PRESS(units=1, n_states=3, activation=activation),
+    ]
+    for layer in made:
+        config = json.loads(json.dumps(layer.get_config()))
+        restored = type(layer).from_config(config)
+        assert json.loads(json.dumps(restored.get_config())) == config
+
+
+def test_model_with_activation_layer_object_saves_and_loads(tmp_path):
+    """A full .keras round trip with an Activation layer object inside PRESS."""
+    inputs = tf.keras.Input(shape=(4,))
+    outputs = layers.PRESS(
+        units=1, n_states=3, activation=tf.keras.layers.Activation("sigmoid")
+    )(inputs)
+    model = tf.keras.Model(inputs, outputs)
+    X = np.random.default_rng(0).standard_normal((8, 4)).astype("float32")
+
+    path = str(tmp_path / "model.keras")
+    model.save(path)
+    loaded = tf.keras.models.load_model(path)
+    np.testing.assert_allclose(
+        loaded.predict(X, verbose=0), model.predict(X, verbose=0)
+    )

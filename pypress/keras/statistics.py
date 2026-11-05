@@ -13,12 +13,48 @@ from typing import Callable, Dict, Tuple
 
 import tensorflow as tf
 
-from .. import utils
+
+def safe_log(p: tf.Tensor, neg_inf: float = -1e9, name: str | None = None) -> tf.Tensor:
+    """Numerically stable log(p) for p in [0, 1], e.g. softmax/simplex outputs.
+
+    Equivalent in spirit to computing log-weights via `log_softmax(logits)` directly
+    (no artificial floor on small-but-nonzero values), for cases where only the
+    already-softmaxed probabilities are available and not the underlying logits.
+    `log(p + eps)` imposes a hard floor at `log(eps)` (e.g. ~ -13.8 for eps=1e-6),
+    which distorts sharp/near-degenerate states whose true log-probability is far
+    below that floor. This instead only substitutes `neg_inf` for exact zeros
+    (float32 softmax underflow), and does so via `tf.where` so no NaN/inf gradient
+    flows back through `tf.math.log` at p == 0.
+    """
+    p = tf.convert_to_tensor(p)
+    is_positive = p > 0
+    safe_p = tf.where(is_positive, p, tf.ones_like(p))
+    return tf.where(
+        is_positive,
+        tf.math.log(safe_p),
+        tf.fill(tf.shape(p), tf.constant(neg_inf, p.dtype)),
+        name=name,
+    )
+
+
+def safe_xlogx(x: tf.Tensor, name: str | None = None) -> tf.Tensor:
+    """Numerically stable x * log(x) for x in [0, 1], e.g. entropy terms.
+
+    Unlike `x * safe_log(x)`, this substitutes the *entire product* with 0 at x == 0,
+    matching the mathematical limit `lim_{x->0} x*log(x) = 0`. Multiplying `x` by
+    `safe_log(x)` directly would reintroduce `safe_log`'s large `neg_inf` floor value
+    into the gradient at x == 0 via the product rule (`d/dx[x*f(x)] = f(x) + x*f'(x)`),
+    producing a large gradient spike instead of the mathematically correct, bounded one.
+    """
+    x = tf.convert_to_tensor(x)
+    is_positive = x > 0
+    safe_x = tf.where(is_positive, x, tf.ones_like(x))
+    return tf.where(is_positive, x * tf.math.log(safe_x), tf.zeros_like(x), name=name)
 
 
 def mean_row_entropy(weights: tf.Tensor) -> tf.Tensor:
     """Mean over observations of the row entropy of the predictive state weights."""
-    return -tf.reduce_mean(tf.reduce_sum(utils.safe_xlogx(weights), axis=1))
+    return -tf.reduce_mean(tf.reduce_sum(safe_xlogx(weights), axis=1))
 
 
 def state_sizes(weights: tf.Tensor) -> tf.Tensor:
@@ -42,7 +78,7 @@ def state_shares(sizes: tf.Tensor) -> tf.Tensor:
 
 def entropy(p: tf.Tensor) -> tf.Tensor:
     """Shannon entropy (nats) of a distribution 'p' over states."""
-    return -tf.reduce_sum(utils.safe_xlogx(p))
+    return -tf.reduce_sum(safe_xlogx(p))
 
 
 def degrees_of_freedom(numerator: tf.Tensor, denominator: tf.Tensor) -> tf.Tensor:

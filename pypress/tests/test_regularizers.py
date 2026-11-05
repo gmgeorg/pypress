@@ -157,7 +157,7 @@ def test_degrees_of_freedom_regularizer_zero_penalty():
     # Assuming tf_col_normalize normalizes columns by L2 norm, the columns of identity remain the same.
     # Then, tr_kernel(weights) should equal 1 + 1 = 2.
 
-    reg = DegreesOfFreedom(l2=l2, df=df_target)
+    reg = DegreesOfFreedom(l2=l2, target=df_target)
     penalty = reg(tf.convert_to_tensor(weights))
 
     # Expected penalty: l2 * (2 - 2) ** 2 = 0.
@@ -180,7 +180,7 @@ def test_degrees_of_freedom_regularizer_nonzero_penalty():
     df_target = 2.0
     weights = np.array([[1, 2], [0, 0]], dtype=np.float32)
 
-    reg = DegreesOfFreedom(l2=l2, df=df_target)
+    reg = DegreesOfFreedom(l2=l2, target=df_target)
     penalty = reg(tf.convert_to_tensor(weights))
 
     # Expected penalty is 1.0 * (3 - 2) ** 2 = 1.0
