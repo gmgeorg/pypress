@@ -42,8 +42,8 @@ def kernel_matrix(
 ) -> Union[pd.DataFrame, np.ndarray]:
     """Computes the kernel matrix implied by PRESS weights.
 
-    The kernel matrix K is computed as:
-        K = weights @ col_normalize(weights).T
+    The smoother matrix H is computed as:
+        H = weights @ col_normalize(weights).T
 
     where col_normalize normalizes each column (state) to sum to 1.
 
@@ -59,8 +59,8 @@ def kernel_matrix(
         >>> import numpy as np
         >>> import pandas as pd
         >>> weights = pd.DataFrame({'s1': [0.1, 0.2, 0.7], 's2': [0.8, 0.1, 0.1]})
-        >>> K = kernel_matrix(weights)
-        >>> K.shape
+        >>> H = kernel_matrix(weights)
+        >>> H.shape
         (3, 3)
     """
     if isinstance(weights, pd.DataFrame):
@@ -82,7 +82,7 @@ def tr_kernel_terms(weights: tf.Tensor) -> Tuple[tf.Tensor, tf.Tensor]:
 
     The trace of the PRESS kernel decomposes over states as
 
-        trace(K) = sum_j (sum_i w_ij^2) / (sum_i w_ij),
+        trace(H) = sum_k (sum_i w_ik^2) / (sum_i w_ik),
 
     so the numerator is the per-state sum of squared weights and the denominator
     is the state size. Returning them separately lets callers average each across

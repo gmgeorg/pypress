@@ -23,7 +23,7 @@ _EPS = 1e-6
 def test_uniform_regularizer_uniform():
     """
     Test the Uniform regularizer with a weight matrix whose rows are exactly uniform.
-    For a row of length J where every element is 1/J, the Shannon entropy is log(J).
+    For a row of length K where every element is 1/K, the Shannon entropy is log(K).
     Thus the penalty should be zero.
     """
     l2 = 1.0
