@@ -5,6 +5,27 @@ All notable changes `pypress` will be documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## pypress v0.5.3 - Nov 5, 2026
+
+### Fixed
+
+* **`DegreesOfFreedom` with `ema_decay` could collapse the model onto one
+  state.** The penalty was differentiated at the smoothed trace(H). For a
+  shrinking state, the running averages still held its earlier size, so the
+  gradient shrank it further, and states died one after another. In a 12-state
+  digits model this happened at every `l2` tried, down to 0.05. The smoothed
+  trace(H) now sets the penalty's value, size and sign; the batch trace(H) sets
+  the gradient's direction. The same model now reaches its target of 10
+  effective states.
+
+* `ema_decay` running averages advanced on calls that leave `training` unset,
+  such as `PRESS.predictive_states(x)` or `model(x)`. Only training calls (as in
+  `fit`) advance them now.
+
+* `analysis.agg_data_by_state` accepts numpy arrays, as the module documents.
+  Two arrays give an array; a DataFrame input labels the result. It raises
+  `ValueError` when data and weights have different numbers of rows.
+
 ## pypress v0.5.2 - Nov 5, 2026
 
 ### Changed

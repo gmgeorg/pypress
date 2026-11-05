@@ -35,16 +35,20 @@ def _in_training() -> bool:
     """Whether the current Keras layer call is a training call.
 
     Activity regularizers are invoked by Keras inside the layer's call context,
-    which records the `training` flag. Outside any layer call (a regularizer
-    called directly) there is no flag, and this counts as training.
+    which records the `training` flag. `fit` sets it to True. A call that leaves
+    it unset, such as `layer(x)` or `PRESS.predictive_states(x)`, counts as
+    inference, as it does for Keras's own layers (e.g. `Dropout`). Outside any
+    layer call (a regularizer called directly) there is no context, and this
+    counts as training.
     """
     try:
         from keras.src.backend.common import global_state
     except ImportError:  # pragma: no cover - Keras internals moved
         return True
     context = global_state.get_global_attribute("current_call_ctx")
-    training = getattr(context, "training", None) if context is not None else None
-    return training is not False
+    if context is None:
+        return True
+    return bool(getattr(context, "training", None))
 
 
 class CrossBatchEstimator(tf.keras.layers.Layer):
@@ -285,10 +289,27 @@ class _PenaltyRegularizer(tf.keras.regularizers.Regularizer):
         training step does.
         """
         n_states = int(x.shape[-1])
-        stats = {name: statistics.compute(name, x) for name in self.STATISTICS}
-        if self._estimator is not None:
-            stats = self._estimator.update(stats, n_states)
-        return self._tensor("l2") * self._penalty(stats, n_states)
+        batch = {name: statistics.compute(name, x) for name in self.STATISTICS}
+        if self._estimator is None:
+            return self._tensor("l2") * self._penalty(batch, n_states)
+        smoothed = self._estimator.update(batch, n_states)
+        return self._tensor("l2") * self._smoothed_penalty(smoothed, batch, n_states)
+
+    def _smoothed_penalty(
+        self,
+        smoothed: Dict[str, tf.Tensor],
+        batch: Dict[str, tf.Tensor],
+        n_states: int,
+    ) -> tf.Tensor:
+        """The penalty, before scaling by `l2`, with cross-batch smoothing.
+
+        'smoothed' holds the smoothed statistics, with gradients flowing to the
+        batch values; 'batch' holds the batch values. By default the penalty is
+        `_penalty` of the smoothed statistics. A subclass overrides this when
+        differentiating its penalty at the smoothed statistics would point the
+        wrong way for the current batch.
+        """
+        return self._penalty(smoothed, n_states)
 
     def __call__(self, x):
         """The activity-regularizer loss for 'x': `penalty(x)` times the batch size.
@@ -658,6 +679,13 @@ class MinStateSize(_PenaltyRegularizer):
         return tf.math.reduce_mean(tf.math.square(shortfall))
 
 
+def _trace(stats: Dict[str, tf.Tensor]) -> tf.Tensor:
+    """trace(H) from the trace statistics in 'stats'."""
+    return statistics.degrees_of_freedom(
+        stats["trace_numerator"], stats["trace_denominator"]
+    )
+
+
 @tf.keras.utils.register_keras_serializable(package="pypress")
 class DegreesOfFreedom(_PenaltyRegularizer):
     """Penalizes degrees of freedom, trace(H), deviating from a target.
@@ -756,9 +784,24 @@ class DegreesOfFreedom(_PenaltyRegularizer):
 
     def _penalty(self, stats, n_states):
         """Squared deviation of trace(H) from the target."""
-        trace = statistics.degrees_of_freedom(
-            stats["trace_numerator"], stats["trace_denominator"]
-        )
+        return self._deviation_penalty(_trace(stats), n_states)
+
+    def _smoothed_penalty(self, smoothed, batch, n_states):
+        """The smoothed trace(H)'s squared deviation, with the batch trace's gradient.
+
+        The value, and the size and sign of the gradient, come from the smoothed
+        trace(H); its direction comes from the batch trace(H). Differentiating
+        the smoothed trace itself is wrong for a state that is shrinking: its
+        running averages still hold its earlier size, which makes the gradient
+        shrink it further, until the model collapses onto one state.
+        """
+        smoothed_trace = tf.stop_gradient(_trace(smoothed))
+        batch_trace = _trace(batch)
+        trace = smoothed_trace + (batch_trace - tf.stop_gradient(batch_trace))
+        return self._deviation_penalty(trace, n_states)
+
+    def _deviation_penalty(self, trace, n_states):
+        """Squared deviation of 'trace' from the target, optionally normalized."""
         deviation = trace - self._tensor("target")
         if self._normalize:
             # K, rather than batch size, is the stable architectural scale.

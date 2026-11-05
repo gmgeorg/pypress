@@ -4,6 +4,7 @@ from typing import Tuple
 
 import numpy as np
 import pandas as pd
+import pytest
 import tensorflow as tf
 
 from .. import analysis
@@ -405,3 +406,30 @@ def test_col_normalize_numpy():
     """col_normalize also takes arrays."""
     weights = np.random.default_rng(1).dirichlet(np.ones(3), size=10)
     np.testing.assert_allclose(analysis.col_normalize(weights).sum(axis=0), 1.0)
+
+
+def test_agg_data_by_state_accepts_arrays():
+    """Arrays in, array out; mixed inputs give a DataFrame labelled by the DataFrame."""
+    data = np.array([[10.0, 1.0], [20.0, 2.0], [30.0, 3.0]])
+    weights = np.array([[1.0, 4.0], [2.0, 5.0], [3.0, 6.0]])
+    expected = np.array([[140 / 6, 320 / 15], [14 / 6, 32 / 15]])
+
+    result = analysis.agg_data_by_state(data, weights)
+    assert isinstance(result, np.ndarray)
+    np.testing.assert_allclose(result, expected)
+
+    weights_df = pd.DataFrame(weights, columns=["s0", "s1"], index=[7, 8, 9])
+    mixed = analysis.agg_data_by_state(data, weights_df)
+    assert list(mixed.columns) == ["s0", "s1"]
+    np.testing.assert_allclose(mixed.values, expected)
+
+    data_df = pd.DataFrame(data, columns=["a", "b"], index=[7, 8, 9])
+    mixed = analysis.agg_data_by_state(data_df, weights)
+    assert list(mixed.index) == ["a", "b"]
+    np.testing.assert_allclose(mixed.values, expected)
+
+
+def test_agg_data_by_state_rejects_mismatched_rows():
+    """Data and weights must describe the same observations."""
+    with pytest.raises(ValueError, match="same observations"):
+        analysis.agg_data_by_state(np.ones((3, 2)), np.ones((4, 2)) / 2)
