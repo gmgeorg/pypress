@@ -9,6 +9,11 @@ Every regularizer here is the same pipeline:
 3. **penalty function**: a pure function of the statistics and K, scaled by
    `l2`.
 
+`penalty(x)` returns that value: the amount added to the training loss. Keras
+divides an activity regularizer's loss by the batch size, so `__call__` returns
+`penalty(x)` times the batch size, and the strength of `l2` does not depend on
+the batch size.
+
 Scalar settings are declared once as `Hyperparameter`s, which own their
 validation, in-graph reading and serialization. See CONTEXT.md for the domain
 terms.
@@ -146,6 +151,21 @@ class CrossBatchEstimator(tf.keras.layers.Layer):
         super().load_own_variables(store)
 
 
+def _batch_size(x, dtype) -> tf.Tensor:
+    """The number of rows of 'x', as a scalar of 'dtype'."""
+    return tf.cast(tf.shape(x)[0], dtype)
+
+
+def _undo_keras_batch_mean(penalty: tf.Tensor, x) -> tf.Tensor:
+    """Scales 'penalty' by the batch size, cancelling Keras's division by it.
+
+    `Layer.__call__` divides an activity regularizer's loss by the batch size of
+    the output (`keras/src/layers/layer.py`), which suits penalties that sum over
+    the batch. PRESS penalties are already batch statistics.
+    """
+    return penalty * _batch_size(x, penalty.dtype)
+
+
 class _PenaltyRegularizer(tf.keras.regularizers.Regularizer):
     """Base for PRESS regularizers: statistic -> estimator -> penalty.
 
@@ -256,13 +276,29 @@ class _PenaltyRegularizer(tf.keras.regularizers.Regularizer):
         """The penalty, before scaling by `l2`, as a function of the statistics."""
         raise NotImplementedError
 
-    def __call__(self, x):
-        """Computes the penalty for a batch of predictive state weights."""
+    def penalty(self, x) -> tf.Tensor:
+        """The penalty this regularizer adds to the training loss for batch 'x'.
+
+        This is `l2` times the penalty function of the statistics of 'x': the
+        amount added to the (per-example mean) loss, independent of the batch
+        size. With `ema_decay`, calling it advances the running averages, as a
+        training step does.
+        """
         n_states = int(x.shape[-1])
         stats = {name: statistics.compute(name, x) for name in self.STATISTICS}
         if self._estimator is not None:
             stats = self._estimator.update(stats, n_states)
         return self._tensor("l2") * self._penalty(stats, n_states)
+
+    def __call__(self, x):
+        """The activity-regularizer loss for 'x': `penalty(x)` times the batch size.
+
+        Keras divides an activity regularizer's loss by the batch size, because
+        its built-in ones sum over the batch. PRESS penalties are already batch
+        statistics, so this cancels that division: the loss Keras adds is exactly
+        `penalty(x)`, at any batch size. Use `penalty` to inspect the value.
+        """
+        return _undo_keras_batch_mean(self.penalty(x), x)
 
     # -- serialization ------------------------------------------------------
 
@@ -786,8 +822,26 @@ class CombinedRegularizer(tf.keras.regularizers.Regularizer):
             ]
         self.regularizers = regularizers
 
+    def penalty(self, x) -> tf.Tensor:
+        """The sum of the children's penalties on 'x'; see `_PenaltyRegularizer.penalty`.
+
+        A child without `penalty` (e.g. a built-in Keras regularizer) contributes
+        what Keras would add for it: its loss divided by the batch size.
+        """
+        total_penalty = 0.0
+        for reg in self.regularizers:
+            if callable(getattr(reg, "penalty", None)):
+                total_penalty += reg.penalty(x)
+            else:
+                total_penalty += reg(x) / _batch_size(x, tf.float32)
+        return total_penalty
+
     def __call__(self, x):
-        """Evaluates the sum of the penalties on 'x'."""
+        """The sum of the children's activity-regularizer losses on 'x'.
+
+        Each PRESS child already cancels Keras's division by the batch size, so
+        the loss Keras adds for this regularizer is exactly `penalty(x)`.
+        """
         total_penalty = 0.0
         for reg in self.regularizers:
             total_penalty += reg(x)

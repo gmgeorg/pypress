@@ -88,6 +88,11 @@ so their `l2` is the worst-case cost of total violation. `DegreesOfFreedom(targe
 its target as an absolute number of states. Set `normalize=True` to divide its error by
 `n_states`, so an `l2` tuned for a fractional error transfers across state counts.
 
+The penalty is added to the loss as is, whatever the batch size. (Keras divides an activity
+regularizer's loss by the batch size; PRESS regularizers cancel that, because their penalties are
+already batch statistics.) `reg.penalty(W)` returns the amount a regularizer adds for a batch
+`W`. Calling `reg(W)` returns that times the batch size, which is what Keras expects.
+
 Pick each weight as a meaningful fraction of the loss you actually see. With a standardized
 target (MSE around 1 at init), an `l2` of roughly 1 to 5 makes a penalty bind, while `l2 = 0.05`
 leaves it decorative.

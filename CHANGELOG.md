@@ -5,6 +5,29 @@ All notable changes `pypress` will be documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## pypress v0.5.2 - Nov 5, 2026
+
+### Changed
+
+* **Regularizer strength no longer depends on the batch size (breaking).**
+  Keras divides an `activity_regularizer`'s loss by the batch size, which suits
+  its built-in regularizers (sums over the batch) but not PRESS penalties
+  (already batch statistics). Every PRESS penalty was therefore applied at
+  `l2 / batch_size`: 1/256 of its documented strength at `batch_size=256`. The
+  regularizers now cancel that division, so the loss Keras adds is exactly the
+  penalty, bounded by `l2` as documented, at any batch size.
+
+  Models trained with existing settings are regularized `batch_size` times more
+  strongly after upgrading. To keep the old behaviour, divide each `l2` by the
+  batch size you train with.
+
+### Added
+
+* `penalty(x)` on every regularizer and on `CombinedRegularizer`: the amount
+  the regularizer adds to the loss for a batch of predictive state weights.
+  Calling a regularizer directly now returns that value times the batch size,
+  which is what Keras expects of an activity regularizer.
+
 ## pypress v0.5.0 - Nov 5, 2026
 
 ### Added
