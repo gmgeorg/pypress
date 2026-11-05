@@ -59,7 +59,9 @@ likely state.
 analysis.agg_data_by_state(X_test, W)   # one row per numeric feature, one column per state
 ```
 
-This gives each numeric feature's mean within each state, weighted by $W$. Together with
+This gives each numeric feature's mean within each state, weighted by $W$. It accepts arrays
+too; with images, reshape each state's column back to the image shape to see what the state looks
+like, as the digits example in the notebook does. Together with
 `press.state_conditional_means` it describes each state as "observations that look like this,
 and have this outcome".
 

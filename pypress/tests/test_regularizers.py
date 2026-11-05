@@ -6,6 +6,7 @@ import tensorflow as tf
 
 # Import the regularizers from your module.
 # Adjust the import path according to your package structure.
+from pypress.keras.layers import PRESS
 from pypress.keras.schedules import ScheduledValue, set_epoch
 from pypress.keras.regularizers import (
     DegreesOfFreedom,
@@ -1099,3 +1100,100 @@ def test_combined_regularizer_with_keras_child_keeps_keras_scaling():
     np.testing.assert_allclose(
         combined.penalty(x).numpy(), _keras_activity_loss(combined, weights), rtol=1e-5
     )
+
+
+# -------- Smoothed DegreesOfFreedom: gradient direction from the batch --------
+
+
+def _trace_np(weights: np.ndarray) -> float:
+    """trace(H) of a batch of predictive state weights, in numpy."""
+    return float(np.sum(np.square(weights).sum(axis=0) / weights.sum(axis=0)))
+
+
+def test_smoothed_degrees_of_freedom_gradient_follows_the_batch_trace():
+    """Value from the smoothed trace(H), gradient direction from the batch trace(H).
+
+    The gradient equals the unsmoothed one scaled by the ratio of the smoothed
+    and the batch deviation from the target.
+    """
+    rng = np.random.default_rng(0)
+    target = 5.0
+    smoothed = DegreesOfFreedom(l2=1.0, target=target, ema_decay=0.9)
+    # History: every state alive. Current batch: state 0 has shrunk.
+    for _ in range(50):
+        smoothed.penalty(
+            tf.convert_to_tensor(rng.dirichlet(np.ones(6), size=64).astype(np.float32))
+        )
+    logits = rng.standard_normal((64, 6)).astype(np.float32)
+    logits[:, 0] -= 4.0
+    z = tf.Variable(logits)
+
+    with tf.GradientTape() as tape:
+        value = smoothed.penalty(tf.nn.softmax(z))
+    grad_smoothed = tape.gradient(value, z).numpy()
+    with tf.GradientTape() as tape:
+        plain_value = DegreesOfFreedom(l2=1.0, target=target).penalty(tf.nn.softmax(z))
+    grad_plain = tape.gradient(plain_value, z).numpy()
+
+    batch_trace = _trace_np(tf.nn.softmax(z).numpy())
+    smoothed_trace = target + np.sign(target - batch_trace) * -np.sqrt(value.numpy())
+    assert smoothed_trace != pytest.approx(batch_trace, abs=1e-3)  # history differs
+    scale = (smoothed_trace - target) / (batch_trace - target)
+    np.testing.assert_allclose(grad_smoothed, scale * grad_plain, rtol=1e-4, atol=1e-7)
+
+
+def test_smoothed_degrees_of_freedom_does_not_collapse_states():
+    """Regression: with `ema_decay`, training used to collapse onto few states.
+
+    Differentiating the smoothed trace(H) pushed shrinking states down further.
+    Here that ended at trace(H) = 2 for a target of 6.
+    """
+    tf.keras.utils.set_random_seed(0)
+    rng = np.random.default_rng(0)
+    centers = rng.standard_normal((6, 8)) * 3
+    labels = rng.integers(0, 6, 600)
+    x = (centers[labels] + rng.standard_normal((600, 8))).astype(np.float32)
+    reg = DegreesOfFreedom(l2=0.5, target=6.0, ema_decay=0.95)
+    features = tf.keras.layers.Dense(16, activation="relu")
+    press = PRESS(
+        units=6,
+        n_states=10,
+        activation="softmax",
+        predictive_state_simplex_kwargs={"activity_regularizer": reg},
+    )
+    model = tf.keras.Sequential([tf.keras.Input(shape=(8,)), features, press])
+    model.compile(
+        loss="sparse_categorical_crossentropy",
+        optimizer=tf.keras.optimizers.Nadam(0.01),
+    )
+    model.fit(x, labels, epochs=10, batch_size=32, verbose=0)
+
+    weights = press.predictive_states(features(x)).numpy()
+    assert _trace_np(weights) > 5.0
+
+
+def test_inference_calls_do_not_advance_running_averages():
+    """Only training batches advance `ema_decay` averages; inference-style calls don't."""
+    reg = DegreesOfFreedom(l2=1.0, target=3.0, ema_decay=0.9)
+    press = PRESS(
+        units=1,
+        n_states=4,
+        predictive_state_simplex_kwargs={"activity_regularizer": reg},
+    )
+    model = tf.keras.Sequential([tf.keras.Input(shape=(5,)), press])
+    model.compile(loss="mse", optimizer="sgd")
+    x = np.random.default_rng(0).standard_normal((64, 5)).astype(np.float32)
+    y = x[:, :1]
+
+    model.fit(x, y, epochs=1, batch_size=32, verbose=0, validation_data=(x, y))
+    assert reg.smoothing_steps == 2
+
+    model.predict(x, verbose=0)
+    press.predictive_states(x)
+    press(x)
+    model(x)
+    model(x, training=False)
+    assert reg.smoothing_steps == 2
+
+    model(x, training=True)
+    assert reg.smoothing_steps == 3

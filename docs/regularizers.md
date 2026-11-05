@@ -143,4 +143,9 @@ one you asked for.
 Either keep `batch_size * min_share` at roughly 10 or more (so `batch_size >= 200` for a 5%
 floor), or set `ema_decay` (0.9 to 0.99). That evaluates the penalty on bias-corrected moving
 averages of the statistics across batches, while gradients still flow through the current batch.
-The averages only advance on training batches, and are saved with the model.
+The averages only advance on training batches (those `fit` runs with `training=True`), and are
+saved with the model. Calls that leave `training` unset, such as `press.predictive_states(X)` or
+`model(X)`, don't advance them.
+
+For `DegreesOfFreedom`, the smoothed trace(H) sets the penalty's value and how hard it pushes, while
+the current batch's trace(H) sets the direction of the gradient.

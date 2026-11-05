@@ -72,19 +72,49 @@ def degrees_of_freedom(weights: Weights) -> float:
 
 
 def agg_data_by_state(
-    data: Union[pd.DataFrame, pd.Series], weights: pd.DataFrame, agg_fn: str = "mean"
-) -> pd.DataFrame:
+    data: Union[pd.DataFrame, pd.Series, np.ndarray],
+    weights: Weights,
+    agg_fn: str = "mean",
+) -> Union[pd.DataFrame, np.ndarray]:
     """Weighted aggregate of each numeric column of 'data' per predictive state.
 
-    Returns a DataFrame with one row per numeric column of 'data' and one column
-    per predictive state.
+    Args:
+      data: The observations, shape (n_samples, n_features): a DataFrame (its
+        numeric columns are used), a Series, or an array.
+      weights: Their predictive state weights, shape (n_samples, n_states).
+      agg_fn: The aggregate; only "mean" is supported.
+
+    Returns:
+      One row per feature and one column per predictive state. An array when
+      'data' and 'weights' are both arrays, otherwise a DataFrame labelled by the
+      DataFrame inputs (an array input takes the other input's row index).
+
+    Raises:
+      ValueError: if 'data' and 'weights' have different numbers of rows.
     """
+    if agg_fn != "mean":
+        raise NotImplementedError(f"agg_fn={agg_fn!r} not supported")
+    if len(data) != len(weights):
+        raise ValueError(
+            f"'data' has {len(data)} rows but 'weights' has {len(weights)}; "
+            "they must describe the same observations."
+        )
+    if not isinstance(data, (pd.DataFrame, pd.Series)) and not isinstance(
+        weights, pd.DataFrame
+    ):
+        data = np.asarray(data, dtype=float)
+        if data.ndim == 1:
+            data = data[:, np.newaxis]
+        return (col_normalize(np.asarray(weights, dtype=float)).T @ data).T
+
     if isinstance(data, pd.Series):
         data = data.to_frame()
+    if not isinstance(data, pd.DataFrame):
+        data = np.asarray(data)
+        data = pd.DataFrame(data.reshape(len(data), -1), index=weights.index)
+    if not isinstance(weights, pd.DataFrame):
+        weights = pd.DataFrame(np.asarray(weights), index=data.index)
     df_numeric = data.select_dtypes("number")
-    if agg_fn == "mean":
-        agg_state = col_normalize(weights).transpose().dot(df_numeric).transpose()
-        agg_state.columns.name = None
-        return agg_state
-
-    raise NotImplementedError(f"agg_fn={agg_fn!r} not supported")
+    agg_state = col_normalize(weights).transpose().dot(df_numeric).transpose()
+    agg_state.columns.name = None
+    return agg_state
