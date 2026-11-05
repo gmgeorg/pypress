@@ -5,8 +5,10 @@ import tensorflow as tf
 from pypress.keras.schedules import (
     ScheduledValue,
     as_tensor,
+    current_epoch,
     deserialize_scalar,
     serialize_scalar,
+    set_epoch,
 )
 
 
@@ -76,36 +78,49 @@ def test_invalid_arguments_rejected():
         ScheduledValue(start=0.0, end=1.0, duration_epochs=4, start_epoch=-1)
 
 
-def test_unscheduled_variable_holds_end_not_start():
+def test_unscheduled_value_reads_end_not_start():
     """A forgotten scheduler must degrade to the enforced penalty, not to none.
 
-    Initializing at `start` would mean that omitting `RegularizerScheduler`
-    silently disables the regularizer for the whole run (a warm-up starts at
-    l2=0). Initializing at `end` degrades to the un-annealed penalty instead.
+    Reading `start` would mean that omitting `RegularizerScheduler` silently
+    disables the regularizer for the whole run (a warm-up starts at l2=0).
+    Reading `end` degrades to the un-annealed penalty instead.
     """
     sched = ScheduledValue(start=0.0, end=1.0, duration_epochs=10)
-    assert float(sched.variable) == 1.0
-    assert not sched.was_scheduled
+    assert current_epoch() is None
+    assert float(sched.value()) == 1.0
 
-    assert sched.assign_epoch(0) == 0.0
-    assert float(sched.variable) == 0.0
-    assert sched.was_scheduled
+    set_epoch(0)
+    assert float(sched.value()) == 0.0
+    set_epoch(5)
+    np.testing.assert_allclose(float(sched.value()), 0.5)
+    set_epoch(None)
+    assert float(sched.value()) == 1.0
 
-    assert sched.assign_epoch(5) == 0.5
-    assert float(sched.variable) == 0.5
+
+@pytest.mark.parametrize("schedule", ["linear", "cosine", "exponential"])
+def test_graph_value_matches_python_value_at(schedule):
+    """value() computed in-graph agrees with value_at() for every epoch."""
+    sched = ScheduledValue(
+        start=9.0, end=1.0, duration_epochs=6, start_epoch=2, schedule=schedule
+    )
+    for epoch in range(12):
+        set_epoch(epoch)
+        np.testing.assert_allclose(
+            float(sched.value()), sched.value_at(epoch), rtol=1e-5, err_msg=str(epoch)
+        )
 
 
-def test_variable_read_propagates_into_a_traced_function():
-    """The whole point: updates must survive tf.function tracing."""
+def test_clock_read_propagates_into_a_traced_function():
+    """The whole point: clock updates must survive tf.function tracing."""
     sched = ScheduledValue(start=1.0, end=5.0, duration_epochs=4)
 
     @tf.function
     def penalty():
         return as_tensor(sched) * 2.0
 
-    sched.assign_epoch(0)
+    set_epoch(0)
     np.testing.assert_allclose(float(penalty()), 2.0)
-    sched.assign_epoch(4)
+    set_epoch(4)
     np.testing.assert_allclose(float(penalty()), 10.0)
 
 
@@ -113,8 +128,20 @@ def test_as_tensor_accepts_plain_floats():
     """as_tensor is the single read path for both floats and ScheduledValues."""
     np.testing.assert_allclose(float(as_tensor(0.25)), 0.25)
     sched = ScheduledValue(start=0.25, end=1.0, duration_epochs=2)
-    sched.assign_epoch(0)
+    set_epoch(0)
     np.testing.assert_allclose(float(as_tensor(sched)), 0.25)
+
+
+def test_deprecated_variable_and_assign_epoch_still_work():
+    """The pre-clock API warns but keeps its meaning."""
+    sched = ScheduledValue(start=0.0, end=1.0, duration_epochs=10)
+    with pytest.warns(DeprecationWarning, match="value"):
+        assert float(sched.variable) == 1.0
+    with pytest.warns(DeprecationWarning, match="set_epoch"):
+        assert sched.assign_epoch(5) == 0.5
+    np.testing.assert_allclose(float(sched.value()), 0.5)
+    with pytest.warns(DeprecationWarning):
+        assert sched.was_scheduled
 
 
 def test_scalar_serialization_roundtrip():

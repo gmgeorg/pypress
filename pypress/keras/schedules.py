@@ -10,27 +10,64 @@ should approach the constrained region from the state-rich side rather than
 being applied at full strength from the start.
 
 A schedule does not move a penalty's optimum -- it changes which local optimum
-is reached. See `pypress.keras.callbacks.RegularizerScheduler` for the callback
-that drives these during `fit`.
+is reached.
+
+All scheduled values read one shared training clock: a non-trainable variable
+holding the current epoch. `pypress.keras.callbacks.RegularizerScheduler`
+advances it during `fit`; each `ScheduledValue` computes its own value from it
+inside the graph, so nothing has to find the scheduled values to update them.
 """
 
 import math
+import warnings
 
 import tensorflow as tf
 
 _SCHEDULES = ("linear", "cosine", "exponential")
+
+# Clock value meaning "no scheduler is running": every value reads its `end`.
+_NOT_STARTED = -1.0
+_CLOCK: tf.Variable | None = None
+
+
+def training_clock() -> tf.Variable:
+    """The shared epoch variable every `ScheduledValue` reads.
+
+    Created on first use, outside any enclosing `tf.function`. Holds -1 while no
+    scheduler is running.
+    """
+    global _CLOCK
+    if _CLOCK is None:
+        with tf.init_scope():
+            _CLOCK = tf.Variable(
+                _NOT_STARTED,
+                trainable=False,
+                dtype=tf.float32,
+                name="pypress_training_clock",
+            )
+    return _CLOCK
+
+
+def set_epoch(epoch: int | None):
+    """Sets the training clock to 'epoch', or stops it when None."""
+    training_clock().assign(_NOT_STARTED if epoch is None else float(epoch))
+
+
+def current_epoch() -> int | None:
+    """The epoch on the training clock, or None when no scheduler is running."""
+    value = float(training_clock().numpy())
+    return None if value < 0.0 else int(value)
 
 
 @tf.keras.utils.register_keras_serializable(package="pypress")
 class ScheduledValue:
     """A scalar that varies with the training epoch, readable from a graph.
 
-    Wraps a non-trainable `tf.Variable` holding the current value. Regularizers
-    read the variable, so updates made by
-    `pypress.keras.callbacks.RegularizerScheduler` take effect inside an already
-    traced `tf.function`. Assigning a plain Python float to a regularizer
-    attribute mid-training does *not* work: the value is captured at trace time
-    and the mutation is silently ignored.
+    The value is computed in-graph from the shared training clock, so updates
+    made by `pypress.keras.callbacks.RegularizerScheduler` take effect inside an
+    already traced `tf.function`. Assigning a plain Python float to a
+    regularizer attribute mid-training does *not* work: the value is captured at
+    trace time and the mutation is silently ignored.
 
     Warm-up and decay are both expressed by the endpoints -- `start < end` ramps
     a penalty up, `start > end` decays it -- so no separate direction flag is
@@ -46,12 +83,12 @@ class ScheduledValue:
         >>> reg = DegreesOfFreedom(l2=0.1, target=target)
 
     Note:
-        The backing variable is initialized to `end`, not `start`. Advancing it
-        requires a `RegularizerScheduler` callback attached to `fit`; forgetting
-        one therefore degrades to the fully enforced, un-annealed penalty rather
-        than silently dropping the regularizer altogether. That is the safe
-        direction: a forgotten warm-up costs you the annealing, not the
-        regularization. `was_scheduled` reports whether a scheduler ever ran.
+        While no scheduler is running the value is `end`, not `start`. Advancing
+        it requires a `RegularizerScheduler` callback attached to `fit`;
+        forgetting one therefore degrades to the fully enforced, un-annealed
+        penalty rather than silently dropping the regularizer altogether. That
+        is the safe direction: a forgotten warm-up costs you the annealing, not
+        the regularization.
     """
 
     def __init__(
@@ -73,7 +110,7 @@ class ScheduledValue:
           start_epoch: Epoch at which interpolation begins. Must be >= 0.
           schedule: One of "linear", "cosine" (smooth ease in/out) or
             "exponential" (geometric interpolation, requires both endpoints > 0).
-          name: Optional name for the backing variable.
+          name: Optional name, used in logs.
         """
         if schedule not in _SCHEDULES:
             raise ValueError(
@@ -95,18 +132,10 @@ class ScheduledValue:
         self.duration_epochs = int(duration_epochs)
         self.start_epoch = int(start_epoch)
         self.schedule = schedule
-        self._assign_count = 0
-        # Initialized to `end`, so a missing scheduler degrades to the fully
-        # enforced penalty instead of silently disabling it. See the class docstring.
-        self.variable = tf.Variable(
-            self.end,
-            trainable=False,
-            dtype=tf.float32,
-            name=name or "scheduled_value",
-        )
+        self.name = name or "scheduled_value"
 
     def value_at(self, epoch: int) -> float:
-        """Computes the scheduled value for 'epoch' (does not assign it)."""
+        """Computes the scheduled value for 'epoch' in plain Python."""
         progress = (epoch - self.start_epoch) / self.duration_epochs
         progress = min(1.0, max(0.0, progress))
 
@@ -118,17 +147,62 @@ class ScheduledValue:
         # Geometric: constant multiplicative step per unit progress.
         return self.start * (self.end / self.start) ** progress
 
+    def value(self) -> tf.Tensor:
+        """The value for the epoch on the training clock, as a float32 tensor.
+
+        Graph-safe: reads the clock variable, so a traced function sees every
+        epoch's value. Equals `value_at(current_epoch())`, or `end` while no
+        scheduler is running.
+        """
+        epoch = tf.convert_to_tensor(training_clock())
+        progress = tf.clip_by_value(
+            (epoch - float(self.start_epoch)) / float(self.duration_epochs), 0.0, 1.0
+        )
+        start, end = tf.constant(self.start), tf.constant(self.end)
+        if self.schedule == "linear":
+            scheduled = start + (end - start) * progress
+        elif self.schedule == "cosine":
+            eased = 0.5 * (1.0 - tf.cos(math.pi * progress))
+            scheduled = start + (end - start) * eased
+        else:
+            scheduled = start * tf.pow(end / start, progress)
+        return tf.where(epoch < 0.0, end, scheduled)
+
+    @property
+    def variable(self) -> tf.Tensor:
+        """Deprecated: the current value. Use `value()` instead."""
+        warnings.warn(
+            "ScheduledValue.variable is deprecated; use ScheduledValue.value().",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.value()
+
     def assign_epoch(self, epoch: int) -> float:
-        """Assigns the value for 'epoch' to the backing variable and returns it."""
-        value = self.value_at(epoch)
-        self.variable.assign(value)
-        self._assign_count += 1
-        return value
+        """Deprecated: sets the shared training clock to 'epoch'.
+
+        This moves *every* scheduled value, not just this one. Use
+        `pypress.keras.schedules.set_epoch` instead.
+        """
+        warnings.warn(
+            "ScheduledValue.assign_epoch is deprecated; all scheduled values read "
+            "one training clock. Use pypress.keras.schedules.set_epoch(epoch).",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        set_epoch(epoch)
+        return self.value_at(epoch)
 
     @property
     def was_scheduled(self) -> bool:
-        """Whether a scheduler has ever advanced this value."""
-        return self._assign_count > 0
+        """Deprecated: whether the training clock is running."""
+        warnings.warn(
+            "ScheduledValue.was_scheduled is deprecated; use "
+            "pypress.keras.schedules.current_epoch() is not None.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return current_epoch() is not None
 
     def get_config(self):
         """Gets the config."""
@@ -157,7 +231,7 @@ class ScheduledValue:
 def as_tensor(value) -> tf.Tensor:
     """Reads a scalar that may be a plain float or a `ScheduledValue`."""
     if isinstance(value, ScheduledValue):
-        return value.variable
+        return value.value()
     return tf.cast(value, tf.float32)
 
 

@@ -5,6 +5,62 @@ All notable changes `pypress` will be documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Changed
+
+* Regularizers are now one pipeline: a named population statistic
+  (`pypress.keras.statistics`), an optional cross-batch estimator, and a pure
+  penalty function. Scalar settings are declared once as `Hyperparameter`s
+  (`pypress.keras.hyperparameters`), which own validation (over the whole
+  schedule), in-graph reading and serialization.
+* `get_config()` of every regularizer now emits all of its settings, using
+  `None` for unset optional ones.
+* `ScheduledValue` computes its value in-graph from one shared training clock
+  (`schedules.training_clock()`). `RegularizerScheduler` advances only that
+  clock, so a scheduled value held anywhere — a layer, a custom loss, a
+  closure — is driven without being discovered. The clock is restored when
+  `fit` ends.
+* `CombinedRegularizer` takes regularizer instances and serializes each child
+  through Keras.
+* Invalid hyperparameters raise `ValueError` (previously `AssertionError` for
+  `DegreesOfFreedom.target`). `TargetEntropy.target` must be >= 0 and `l2` >= 0.
+
+### Fixed
+
+* `ema_decay` averages only advance on training batches; `evaluate` and
+  `predict` no longer contaminate them.
+* `ema_decay` state is tracked by the layer it regularizes, so it appears in
+  `model.variables` and is saved and checkpointed. Models saved before this
+  load with fresh averages.
+* Applying one smoothed regularizer to two layers raises a clear `ValueError`
+  instead of crashing on a shape mismatch, or silently mixing statistics when
+  the shapes agree.
+* `CombinedRegularizer.get_config()` with a `ScheduledValue` in a child is now
+  JSON-serializable.
+* `UniformAndDegreesOfFreedomRegularizer.from_config` no longer leaves raw
+  config dicts in its attributes.
+* `RegularizerScheduler` docstring said unscheduled values stay at `start`;
+  they read `end`.
+
+### Deprecated
+
+* `CombinedRegularizer` with `(class, kwargs)` tuples (and the
+  `regularizer_tuples=` keyword). Configs in the old format still load.
+* `UniformAndDegreesOfFreedomRegularizer`: use
+  `CombinedRegularizer([Uniform(...), DegreesOfFreedom(...)])`.
+* `ScheduledValue.variable`, `.assign_epoch()`, `.was_scheduled`: use
+  `.value()`, `schedules.set_epoch()`, `schedules.current_epoch()`.
+* `callbacks.collect_scheduled_values` and
+  `RegularizerScheduler.scheduled_values`.
+* `DegreesOfFreedom(df=...)` now warns with `DeprecationWarning` (was
+  `UserWarning`).
+
+### Removed
+
+* `RegularizerScheduler` no longer warns when a model has no `ScheduledValue`,
+  since it no longer searches the model.
+
 ## pypress v0.3.0 - Aug 29, 2026
 
 ### Added

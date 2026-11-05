@@ -4,6 +4,7 @@ import warnings
 
 import tensorflow as tf
 
+from . import schedules
 from .schedules import ScheduledValue
 
 # Attributes on a Keras layer that may hold a regularizer.
@@ -39,7 +40,10 @@ def _walk(obj, seen):
 
 
 def collect_scheduled_values(model: tf.keras.Model) -> list[ScheduledValue]:
-    """Finds every `ScheduledValue` attached to a model's regularizers.
+    """Deprecated: finds `ScheduledValue`s attached to a model's regularizers.
+
+    No longer needed: every `ScheduledValue` reads the shared training clock, so
+    `RegularizerScheduler` does not have to find them.
 
     Walks all layers (recursing into nested layers such as `PRESS`) and inspects
     their regularizer attributes, descending through container regularizers like
@@ -52,6 +56,12 @@ def collect_scheduled_values(model: tf.keras.Model) -> list[ScheduledValue]:
     Returns:
       The scheduled values found, in a stable order and without duplicates.
     """
+    warnings.warn(
+        "collect_scheduled_values is deprecated; RegularizerScheduler no longer "
+        "needs to find scheduled values.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     found, seen = [], set()
 
     visited_layers = set()
@@ -92,16 +102,20 @@ def collect_scheduled_values(model: tf.keras.Model) -> list[ScheduledValue]:
 
 
 class RegularizerScheduler(tf.keras.callbacks.Callback):
-    """Advances every `ScheduledValue` in a model's regularizers each epoch.
+    """Drives every `ScheduledValue` by advancing the shared training clock.
 
     Regularizer penalties are captured inside a traced `tf.function`, so mutating
     a plain Python attribute mid-training is silently ignored -- the old value
-    keeps being used with no error. `ScheduledValue` stores its value in a
-    `tf.Variable` instead, and this callback assigns it at the start of every
-    epoch so the change actually takes effect.
+    keeps being used with no error. A `ScheduledValue` instead computes its value
+    in-graph from one shared epoch variable (`schedules.training_clock()`), and
+    this callback sets that variable at the start of every epoch. Because every
+    scheduled value reads the same clock, nothing has to be discovered: a value
+    held by a layer, a loss, or any other object is scheduled alike.
 
-    Attach it to `fit`; without it, every `ScheduledValue` stays at its `start`
-    value for the entire run.
+    Attach it to `fit`; without it, every `ScheduledValue` stays at its `end`
+    value for the entire run (the fully enforced penalty). When `fit` returns,
+    the clock is restored to what it was before, so a later model trained
+    without a scheduler is not affected by this run.
 
     Example:
         >>> dof = DegreesOfFreedom(
@@ -111,42 +125,42 @@ class RegularizerScheduler(tf.keras.callbacks.Callback):
         >>> model.fit(X, y, epochs=30, callbacks=[RegularizerScheduler()])
 
     Attributes:
-      verbose: If True, logs each value assigned at the start of every epoch.
+      verbose: If True, logs the epoch set on the clock at every epoch.
     """
 
     def __init__(self, verbose: bool = False):
         """Initializes the callback.
 
         Args:
-          verbose: If True, log every scheduled value at the start of each epoch.
+          verbose: If True, log the clock's epoch at the start of each epoch.
         """
         super().__init__()
         self.verbose = verbose
-        self._scheduled_values: list[ScheduledValue] = []
-
-    def set_model(self, model):
-        """Binds the model and discovers the scheduled values to drive."""
-        super().set_model(model)
-        self._scheduled_values = collect_scheduled_values(model)
-        if not self._scheduled_values:
-            warnings.warn(
-                "RegularizerScheduler found no ScheduledValue in the model's "
-                "regularizers; it will have no effect. Pass a ScheduledValue as a "
-                "regularizer's 'l2' or 'target' to schedule it.",
-                stacklevel=2,
-            )
+        self._previous_epoch: int | None = None
 
     @property
     def scheduled_values(self) -> list[ScheduledValue]:
-        """The scheduled values this callback drives (populated once bound)."""
-        return self._scheduled_values
+        """Deprecated: the scheduled values reachable from the model."""
+        warnings.warn(
+            "RegularizerScheduler.scheduled_values is deprecated; the scheduler "
+            "drives all scheduled values through the shared training clock.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            return collect_scheduled_values(self.model)
+
+    def on_train_begin(self, logs=None):
+        """Remembers the clock so it can be restored after training."""
+        self._previous_epoch = schedules.current_epoch()
 
     def on_epoch_begin(self, epoch, logs=None):
-        """Assigns each scheduled value for the epoch about to start."""
-        for scheduled in self._scheduled_values:
-            value = scheduled.assign_epoch(epoch)
-            if self.verbose:
-                print(
-                    f"[RegularizerScheduler] epoch {epoch}: "
-                    f"{scheduled.variable.name} = {value:.6g}"
-                )
+        """Sets the training clock to the epoch about to start."""
+        schedules.set_epoch(epoch)
+        if self.verbose:
+            print(f"[RegularizerScheduler] epoch {epoch}")
+
+    def on_train_end(self, logs=None):
+        """Restores the clock to its value before training."""
+        schedules.set_epoch(self._previous_epoch)

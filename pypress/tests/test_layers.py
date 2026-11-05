@@ -657,7 +657,11 @@ def test_press_get_config_serializes_nested_keras_objects():
     restored = layers.PRESS.from_config(config)
     restored_reg = restored.predictive_state_simplex.activity_regularizer
     assert isinstance(restored_reg, regularizers.MinStateSize)
-    assert restored_reg.get_config() == {"l2": 0.3, "min_share": 0.05}
+    assert restored_reg.get_config() == {
+        "l2": 0.3,
+        "min_share": 0.05,
+        "ema_decay": None,
+    }
 
 
 def test_press_model_save_and_reload_round_trip(tmp_path):
