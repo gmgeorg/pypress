@@ -70,7 +70,7 @@ def test_tr_kernel_custom():
     # Normalize columns manually:
     col_sum = tf.reduce_sum(weights, axis=0)
     normalized = weights / col_sum
-    # Compute kernel: K = normalized^T * weights, trace = sum(diag(K))
+    # Compute smoother matrix: H = normalized^T * weights, trace = sum(diag(H))
     kernel = tf.matmul(tf.transpose(normalized), weights)
     expected = tf.reduce_sum(tf.linalg.diag_part(kernel))
     result = utils.tr_kernel(weights)
@@ -86,20 +86,20 @@ def test_kernel_matrix_pandas():
     )
 
     # Compute kernel matrix
-    K = utils.kernel_matrix(weights)
+    H = utils.kernel_matrix(weights)
 
     # Check type and shape
-    assert isinstance(K, pd.DataFrame)
-    assert K.shape == (3, 3)
+    assert isinstance(H, pd.DataFrame)
+    assert H.shape == (3, 3)
 
     # Check index is preserved
-    pd.testing.assert_index_equal(K.index, weights.index)
-    pd.testing.assert_index_equal(K.columns, weights.index)
+    pd.testing.assert_index_equal(H.index, weights.index)
+    pd.testing.assert_index_equal(H.columns, weights.index)
 
     # Manually compute expected kernel
     norm_weights = utils.col_normalize(weights)
-    expected_K = weights.dot(norm_weights.transpose())
-    pd.testing.assert_frame_equal(K, expected_K)
+    expected_H = weights.dot(norm_weights.transpose())
+    pd.testing.assert_frame_equal(H, expected_H)
 
     # Check symmetry property for this specific computation
     # Note: kernel is NOT necessarily symmetric in general, but we can verify
@@ -112,18 +112,18 @@ def test_kernel_matrix_numpy():
     weights = np.array([[0.1, 0.8, 0.5], [0.2, 0.1, 0.3], [0.7, 0.1, 0.2]])
 
     # Compute kernel matrix
-    K = utils.kernel_matrix(weights)
+    H = utils.kernel_matrix(weights)
 
     # Check type and shape
-    assert isinstance(K, np.ndarray)
-    assert K.shape == (3, 3)
+    assert isinstance(H, np.ndarray)
+    assert H.shape == (3, 3)
 
     # Manually compute expected kernel
     col_sums = weights.sum(axis=0, keepdims=True)
     norm_weights = weights / col_sums
-    expected_K = weights @ norm_weights.T
+    expected_H = weights @ norm_weights.T
 
-    np.testing.assert_allclose(K, expected_K, rtol=1e-10)
+    np.testing.assert_allclose(H, expected_H, rtol=1e-10)
 
 
 def test_kernel_matrix_trace_consistency():

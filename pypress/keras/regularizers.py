@@ -136,7 +136,7 @@ class _StateSizeRegularizer(_SmoothedRegularizer):
     """Base for regularizers acting on the population marginal over states.
 
     Turns a batch of PRESS weights into the state-size marginal
-    `p_k = state_size(W)_k / sum_j state_size(W)_j`, smoothed across batches when
+    `p_k = state_size(W)_k / sum_l state_size(W)_l`, smoothed across batches when
     `ema_decay` is set. See `_SmoothedRegularizer` for why smoothing matters.
     """
 
@@ -284,7 +284,7 @@ class TargetEntropy(_SmoothedRegularizer):
 
 @tf.keras.utils.register_keras_serializable(package="pypress")
 class Uniform(TargetEntropy):
-    """Penalizes weights if they are not uniform across columns (1 / J).
+    """Penalizes weights if they are not uniform across columns (1 / K).
 
     Special case of TargetEntropy where the target is fixed to the maximum
     possible entropy for uniform weights, log(# of columns), always computed
@@ -322,7 +322,7 @@ class StateSizeEntropy(_StateSizeRegularizer):
 
     This regularizer looks at the column marginal instead,
 
-        p_k = state_size(W)_k / sum_j state_size(W)_j,
+        p_k = state_size(W)_k / sum_l state_size(W)_l,
 
     the share of the population assigned to state k, and penalizes its deviation
     from uniform usage via the (normalized) Kullback-Leibler divergence
@@ -429,7 +429,7 @@ class MinStateSize(_StateSizeRegularizer):
     x% of observations fall in it" directly, in the units the modeler thinks in.
     Given the state-size marginal
 
-        p_k = state_size(W)_k / sum_j state_size(W)_j,
+        p_k = state_size(W)_k / sum_l state_size(W)_l,
 
     the penalty is the mean squared relative shortfall below the floor:
 
@@ -535,30 +535,30 @@ class DegreesOfFreedom(_SmoothedRegularizer):
 
     PRESS kernel smoother implied by predictive states equals
 
-        K = W * D^(-1) * W' in R^{N x N},
+        H = W * D^(-1) * W' in R^{N x N},
 
-    where D is a diagonal matrix with D_ii = size of state i = sum_j w_i,j.
+    where D is a diagonal matrix with D_kk = size of state k = sum_i w_ik.
 
     Degrees of freedom of a kernel smoother is equal to the trace of the kernel matrix.
     In general the trace must be computed from the full N x N kernel matrix diagonal,
     which can be prohibitive if N is large.  However, due to special structure
     of the PRESS kernel and properties of trace operator, this can be simplified as
 
-        trace(K) = trace(W * D^-1 * W') = trace(W' * W * D^-1),
+        trace(H) = trace(W * D^-1 * W') = trace(W' * W * D^-1),
 
-    which is the trace of a J x J matrix, where J << N is the number of states.
+    which is the trace of a K x K matrix, where K << N is the number of states.
 
     Penalizer here is penalizing if the empirical degrees of freedom is different
     to target value.
 
     Note this measures the *effective* number of states: for hard assignments
-    `trace(K)` equals the number of non-empty states exactly. A `target` well
+    `trace(H)` equals the number of non-empty states exactly. A `target` well
     below the layer's `n_states` therefore does not merely tolerate dead states,
     it optimizes for them. If the intent is a smaller model, reduce `n_states`.
 
     Both `l2` and `target` accept a `pypress.keras.schedules.ScheduledValue`.
     Which to schedule depends on where training starts: at initialization the
-    weights are uniform, so `trace(K)` is exactly 1 regardless of `n_states` --
+    weights are uniform, so `trace(H)` is exactly 1 regardless of `n_states` --
     the states are all alive but indistinguishable, and the trace *grows* as they
     differentiate. A fixed `target` well below `n_states` therefore caps
     differentiation from the first step rather than pruning states later.

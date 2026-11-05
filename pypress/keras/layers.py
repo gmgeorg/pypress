@@ -44,9 +44,9 @@ class PredictiveStateSimplex(tf.keras.layers.Dense):
 
     Maps input features to predictive state simplex.
 
-        X --> (S_1, ..., S_J) in Delta^{N x J}
+        X --> (S_1, ..., S_K) in Delta^{N x K}
 
-    to a J-dimensional simplex.  In Goerg (2017, 2018) this is also known as the
+    to a K-dimensional simplex.  In Goerg (2017, 2018) this is also known as the
     epsilon-mapping from features to states.
     """
 
@@ -99,15 +99,15 @@ class PredictiveStateMeans(tf.keras.layers.Layer):
     probabilities P(S | X) from the PredictiveStateSimplex layer.
 
     Mathematical formulation:
-        output = sum_{j=1}^{J} w_j(X) * mu_j
+        output = sum_{k=1}^{K} w_k(X) * mu_k
 
     where:
-        - w_j(X) = P(S_j | X) are the predictive state probabilities (input)
-        - mu_j are the learnable state-conditional means (weights of this layer)
-        - J is the number of predictive states
+        - w_k(X) = P(S_k | X) are the predictive state probabilities (input)
+        - mu_k are the learnable state-conditional means (weights of this layer)
+        - K is the number of predictive states
 
     The layer learns a matrix of state-conditional means of shape (n_states, units),
-    where each row j represents the mean output mu_j for state j. The input state
+    where each row k represents the mean output mu_k for state k. The input state
     probabilities are used to compute a weighted mixture via matrix multiplication.
 
     Input shape:
@@ -170,8 +170,8 @@ class PredictiveStateMeans(tf.keras.layers.Layer):
     def build(self, input_shape: List[int]):
         """Build the layer by creating trainable state-conditional mean weights.
 
-        The weight matrix has shape (n_states, units) where each row j contains
-        the mean vector mu_j for state j.
+        The weight matrix has shape (n_states, units) where each row k contains
+        the mean vector mu_k for state k.
 
         Args:
             input_shape: Shape of input tensor, expected to be (batch_size, n_states).
@@ -214,11 +214,11 @@ class PredictiveStateMeans(tf.keras.layers.Layer):
         """Returns state-conditional means after applying activation function.
 
         The activation function is applied element-wise to the logits to produce
-        the final state-conditional means mu_j for j=1..J.
+        the final state-conditional means mu_k for k=1..K.
 
         Returns:
             Tensor of shape (n_states, units) containing the activated state-conditional
-            means. Each row j represents the mean output mu_j for predictive state j.
+            means. Each row k represents the mean output mu_k for predictive state k.
         """
         return self._activation_layer(self._state_conditional_mean_logits)
 
@@ -226,14 +226,14 @@ class PredictiveStateMeans(tf.keras.layers.Layer):
         """Forward pass: compute weighted mixture of state-conditional means.
 
         Computes the PRESS prediction as a weighted sum:
-            output[i] = sum_{j=1}^{J} inputs[i,j] * mu_j
+            output[i] = sum_{k=1}^{K} inputs[i,k] * mu_k
 
         This is implemented efficiently via matrix multiplication:
             output = inputs @ state_conditional_means
 
         where:
-            - inputs[i,j] = P(S_j | X_i) are the state probabilities for sample i
-            - mu_j are the state-conditional means (rows of state_conditional_means)
+            - inputs[i,k] = P(S_k | X_i) are the state probabilities for sample i
+            - mu_k are the state-conditional means (rows of state_conditional_means)
 
         Args:
             inputs: Tensor of shape (batch_size, n_states) representing predictive
@@ -293,13 +293,13 @@ class PRESS(tf.keras.layers.Layer):
     The PRESS layer is essentially a mixture distribution over state-conditional predictive
     distributions as
 
-        P(y | X) = \\sum_{j=1}^{J} P(y | X, s_j) * P(s_j | X)
-                 = \\sum_{j=1}^{J} P(y | s_j) * P(s_j | X)
+        P(y | X) = \\sum_{k=1}^{K} P(y | X, s_k) * P(s_k | X)
+                 = \\sum_{k=1}^{K} P(y | s_k) * P(s_k | X)
 
 
     For tensors this means that
 
-        N x d = (N x J) * (J x d)
+        N x d = (N x K) * (K x d)
 
     where d is the number of output units.
     """
@@ -420,11 +420,11 @@ class PRESS(tf.keras.layers.Layer):
 class PredictiveStateParams(tf.keras.layers.Layer):
     """Layer that learns state-conditional parameters independent of input features.
 
-    This layer implements state-conditional parameters theta_j for j=1..J that are
+    This layer implements state-conditional parameters theta_k for k=1..K that are
     independent of input features X. Each state has its own set of parameters that
     can be activated with different activation functions.
 
-    The layer learns a weight matrix of shape [J, P] where J is the number of states
+    The layer learns a weight matrix of shape [K, P] where K is the number of states
     and P is the number of parameters per state. These parameters are broadcasted
     across the batch dimension.
 
@@ -432,7 +432,7 @@ class PredictiveStateParams(tf.keras.layers.Layer):
         PredictiveStateMeans is a special case of this layer that:
         1. Only models the mean (P=1 parameter per state for scalar outputs)
         2. Does NOT broadcast parameters across batch - instead it computes a weighted
-           mixture: output = sum_j w_j * mu_j (i.e., it multiplies by state probabilities)
+           mixture: output = sum_k w_k * mu_k (i.e., it multiplies by state probabilities)
 
         In contrast, PredictiveStateParams broadcasts the same parameter values to all
         batch samples and can model multiple parameters per state. This is useful for:
@@ -614,7 +614,7 @@ class PredictiveStateParams(tf.keras.layers.Layer):
 
         Returns:
             Tensor of shape (n_states, n_params_per_state) containing the activated
-            state-conditional parameters theta_j for each state j and parameter p.
+            state-conditional parameters theta_k for each state k and parameter p.
         """
         logits = self._theta_logits  # [K,P]
         cols = tf.split(

@@ -91,11 +91,11 @@ them tunable:
 | `TargetEntropy` / `Uniform` | How sharp each *row* is — one observation's state assignment | mean row entropy `= log(K)`, the maximum |
 | `StateSizeEntropy` | Whether state usage is spread across all states, population-wide | penalty `= 0` |
 | `MinStateSize` | A per-state floor: "at least x% of observations per state" | penalty `= 0` |
-| `DegreesOfFreedom` | Effective number of states, via the kernel trace | `trace(K) = 1`, **not** `n_states` |
+| `DegreesOfFreedom` | Effective number of states, via the kernel trace | `trace(H) = 1`, **not** `n_states` |
 
 Three consequences worth internalizing:
 
-* **`trace(K)` starts at 1 and grows.** At initialization every row is identical, so the kernel
+* **`trace(H)` starts at 1 and grows.** At initialization every row is identical, so the kernel
   is rank one no matter how many states you asked for. A `DegreesOfFreedom` target below
   `n_states` therefore *caps differentiation from the first step* rather than pruning states
   later. If you want a small model, reduce `n_states`; use `DegreesOfFreedom` to prune once
@@ -121,7 +121,7 @@ reg = regularizers.CombinedRegularizer([
      {"l2": 5.0, "min_share": 0.05, "ema_decay": 0.95}),
 
     # Complexity: let states differentiate first, then prune toward 4 effective states.
-    # Warmed up from 0, because trace(K) starts at 1 and must be allowed to grow.
+    # Warmed up from 0, because trace(H) starts at 1 and must be allowed to grow.
     (regularizers.DegreesOfFreedom,
      {"l2": schedules.ScheduledValue(start=0.0, end=2.0, duration_epochs=epochs // 2),
       "target": 4.0, "ema_decay": 0.95}),
@@ -154,7 +154,7 @@ differs per regularizer, so do **not** ramp them all together.
 
 | Regularizer | Schedule | Why |
 | --- | --- | --- |
-| `DegreesOfFreedom` | `l2`: `0 -> target strength` | `trace(K)` starts at 1; let it grow on the fit signal, then prune |
+| `DegreesOfFreedom` | `l2`: `0 -> target strength` | `trace(H)` starts at 1; let it grow on the fit signal, then prune |
 | `DegreesOfFreedom` | `target`: `n_states -> desired` (alternative) | More aggressive: forces differentiation first, then prunes gradually |
 | `DegreesOfFreedom` | `normalize=True` | Keep the target in effective-state units while normalizing its error by `n_states` |
 | `TargetEntropy` | `entropy_fraction`: `1.0 -> desired` | Row entropy starts at `log(K)`, i.e. fraction 1.0 — starts the constraint where the model already is |
@@ -199,14 +199,14 @@ transformations (as seen in Figure 3a).
 
 In contrast, PRESS decomposes the predictive distribution into a mixture distribution over
 **predictive states** ($S$). This architecture relies on a critical property: conditioned on a
-predictive state $j$, the output ($y$) becomes conditionally independent of the input features
+predictive state $k$, the output ($y$) becomes conditionally independent of the input features
 ($X$).
 
 Mathematically, this is expressed as:
 
 ![PRESS equation](imgs/press_decomposition_equation.png)
 
-The second equality holds because the state $j$ captures all relevant information from $X$
+The second equality holds because the state $k$ captures all relevant information from $X$
 necessary to predict $y$, rendering the raw features redundant once the state is known.
 
 ### 3. Key Advantages and Clustering

@@ -9,7 +9,7 @@ Keras/TensorFlow implementation of Predictive State Smoothing (PRESS) layers.
 Core PRESS layers for building models:
 
 - **`PredictiveStateSimplex`**: Maps input features X to predictive state probabilities P(S|X) via softmax
-- **`PredictiveStateMeans`**: Computes weighted mixture of state-conditional means: Σ P(S_j|X) · μ_j
+- **`PredictiveStateMeans`**: Computes weighted mixture of state-conditional means: Σ P(S_k|X) · μ_k
 - **`PredictiveStateParams`**: Learns state-conditional parameters (e.g., distribution params)
   independent of features
 - **`PRESS`**: Convenience wrapper combining simplex and means layers
@@ -124,11 +124,11 @@ model = keras.Sequential([
 PRESS decomposes p(y|X) via predictive states:
 
 ```text
-p(y|X) = Σ_j p(y|s_j) · p(s_j|X)
+p(y|X) = Σ_k p(y|s_k) · p(s_k|X)
 ```
 
 where:
 
-- **p(s_j|X)**: Predictive state probabilities (from `PredictiveStateSimplex`)
-- **p(y|s_j)**: State-conditional distributions (parameterized by `PredictiveStateMeans` or `PredictiveStateParams`)
+- **p(s_k|X)**: Predictive state probabilities (from `PredictiveStateSimplex`)
+- **p(y|s_k)**: State-conditional distributions (parameterized by `PredictiveStateMeans` or `PredictiveStateParams`)
 - **Conditional independence**: y ⊥ X | s (outputs independent of features given state)
