@@ -45,7 +45,7 @@ and its degrees of freedom.
 ```bash
 pip install git+https://github.com/gmgeorg/pypress.git
 # or a specific release
-pip install git+https://github.com/gmgeorg/pypress.git@v0.5.3
+pip install git+https://github.com/gmgeorg/pypress.git@v0.5.4
 ```
 
 It requires Python 3.12+ and TensorFlow 2.x.
