@@ -24,7 +24,6 @@ import warnings
 import tensorflow as tf
 
 from ..core import schedules as core_schedules
-from ..core.schedules import epoch_clock  # noqa: F401
 
 # Clock value meaning "no scheduler is running": every value reads its `end`.
 _NOT_STARTED = -1.0
