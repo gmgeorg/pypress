@@ -23,7 +23,8 @@ import warnings
 
 import tensorflow as tf
 
-_SCHEDULES = ("linear", "cosine", "exponential")
+from ..core import schedules as core_schedules
+from ..core.schedules import epoch_clock  # noqa: F401
 
 # Clock value meaning "no scheduler is running": every value reads its `end`.
 _NOT_STARTED = -1.0
@@ -49,8 +50,13 @@ def training_clock() -> tf.Variable:
 
 
 def set_epoch(epoch: int | None):
-    """Sets the training clock to 'epoch', or stops it when None."""
+    """Sets the training clock to 'epoch', or stops it when None.
+
+    Also sets the framework-free clock in `pypress.core.schedules`, so a
+    `pypress.core` `ScheduledValue` reads the same epoch.
+    """
     training_clock().assign(_NOT_STARTED if epoch is None else float(epoch))
+    core_schedules.set_epoch(epoch)
 
 
 def current_epoch() -> int | None:
@@ -60,7 +66,7 @@ def current_epoch() -> int | None:
 
 
 @tf.keras.utils.register_keras_serializable(package="pypress")
-class ScheduledValue:
+class ScheduledValue(core_schedules.ScheduledValue):
     """A scalar that varies with the training epoch, readable from a graph.
 
     The value is computed in-graph from the shared training clock, so updates
@@ -69,13 +75,8 @@ class ScheduledValue:
     regularizer attribute mid-training does *not* work: the value is captured at
     trace time and the mutation is silently ignored.
 
-    Warm-up and decay are both expressed by the endpoints -- `start < end` ramps
-    a penalty up, `start > end` decays it -- so no separate direction flag is
-    needed. This matters because the right direction differs per regularizer:
-    `DegreesOfFreedom`, which pushes toward *fewer* effective states, should warm
-    up from 0, while `MinStateSize`/`StateSizeEntropy`, which keep states alive,
-    should be at full strength during the fragile early epochs and if anything
-    decay later.
+    Everything else -- the schedules, `value_at`, the config -- is inherited from
+    `pypress.core.schedules.ScheduledValue`.
 
     Example:
         >>> # Anneal the degrees-of-freedom target from 9 states down to 3.
@@ -90,62 +91,6 @@ class ScheduledValue:
         is the safe direction: a forgotten warm-up costs you the annealing, not
         the regularization.
     """
-
-    def __init__(
-        self,
-        start: float,
-        end: float,
-        duration_epochs: int,
-        *,
-        start_epoch: int = 0,
-        schedule: str = "linear",
-        name: str | None = None,
-    ):
-        """Initializes the scheduled value.
-
-        Args:
-          start: Value used at and before `start_epoch`.
-          end: Value reached at `start_epoch + duration_epochs` and held after.
-          duration_epochs: Number of epochs spent interpolating. Must be >= 1.
-          start_epoch: Epoch at which interpolation begins. Must be >= 0.
-          schedule: One of "linear", "cosine" (smooth ease in/out) or
-            "exponential" (geometric interpolation, requires both endpoints > 0).
-          name: Optional name, used in logs.
-        """
-        if schedule not in _SCHEDULES:
-            raise ValueError(
-                f"'schedule' must be one of {_SCHEDULES}. Got {schedule!r}."
-            )
-        if duration_epochs < 1:
-            raise ValueError(f"'duration_epochs' must be >= 1. Got {duration_epochs}.")
-        if start_epoch < 0:
-            raise ValueError(f"'start_epoch' must be >= 0. Got {start_epoch}.")
-        if schedule == "exponential" and (start <= 0.0 or end <= 0.0):
-            raise ValueError(
-                "'exponential' schedule interpolates geometrically and needs both "
-                f"endpoints > 0. Got start={start}, end={end}. Use 'linear' or "
-                "'cosine' to ramp from 0."
-            )
-
-        self.start = float(start)
-        self.end = float(end)
-        self.duration_epochs = int(duration_epochs)
-        self.start_epoch = int(start_epoch)
-        self.schedule = schedule
-        self.name = name or "scheduled_value"
-
-    def value_at(self, epoch: int) -> float:
-        """Computes the scheduled value for 'epoch' in plain Python."""
-        progress = (epoch - self.start_epoch) / self.duration_epochs
-        progress = min(1.0, max(0.0, progress))
-
-        if self.schedule == "linear":
-            return self.start + (self.end - self.start) * progress
-        if self.schedule == "cosine":
-            eased = 0.5 * (1.0 - math.cos(math.pi * progress))
-            return self.start + (self.end - self.start) * eased
-        # Geometric: constant multiplicative step per unit progress.
-        return self.start * (self.end / self.start) ** progress
 
     def value(self) -> tf.Tensor:
         """The value for the epoch on the training clock, as a float32 tensor.
@@ -203,29 +148,6 @@ class ScheduledValue:
             stacklevel=2,
         )
         return current_epoch() is not None
-
-    def get_config(self):
-        """Gets the config."""
-        return {
-            "start": self.start,
-            "end": self.end,
-            "duration_epochs": self.duration_epochs,
-            "start_epoch": self.start_epoch,
-            "schedule": self.schedule,
-        }
-
-    @classmethod
-    def from_config(cls, config):
-        """Recreates a ScheduledValue from its configuration."""
-        return cls(**config)
-
-    def __repr__(self):
-        """Returns a readable representation."""
-        return (
-            f"ScheduledValue(start={self.start}, end={self.end}, "
-            f"duration_epochs={self.duration_epochs}, "
-            f"start_epoch={self.start_epoch}, schedule={self.schedule!r})"
-        )
 
 
 def as_tensor(value) -> tf.Tensor:

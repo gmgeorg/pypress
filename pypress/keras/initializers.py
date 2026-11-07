@@ -16,54 +16,15 @@ initializer inverts the activation column by column.
 from typing import Optional, Sequence, Union
 
 import numpy as np
-import pandas as pd
 import tensorflow as tf
 
+from ..core import initializers as core_init
+from ..core.initializers import (  # noqa: F401
+    InitValues,
+    initialize_from_y,
+    state_conditional_values,
+)
 from . import activations as pr_act
-from .activations import get_inverse_activation
-
-InitValues = Union[float, Sequence[float], Sequence[Sequence[float]], np.ndarray]
-
-
-def state_conditional_values(
-    init_values: InitValues, n_states: int, n_columns: int
-) -> np.ndarray:
-    """Expands 'init_values' into a table of shape (n_states, n_columns).
-
-    Raises:
-      ValueError: if 'init_values' is not a number or array, or its shape does
-        not match the table.
-    """
-    if isinstance(init_values, bool) or isinstance(init_values, str):
-        raise ValueError(
-            f"'init_values' must be a number or an array. Got {type(init_values)}."
-        )
-    try:
-        values = np.asarray(init_values, dtype=float)
-    except (TypeError, ValueError) as error:
-        raise ValueError(
-            f"'init_values' must be a number or an array. Got {type(init_values)}."
-        ) from error
-
-    if values.ndim == 0:
-        return np.full((n_states, n_columns), float(values))
-    if values.ndim == 1:
-        if values.shape[0] != n_columns:
-            raise ValueError(
-                f"1D 'init_values' must have one value per column ({n_columns}). "
-                f"Got shape {values.shape}."
-            )
-        return np.tile(values, (n_states, 1))
-    if values.ndim == 2:
-        if values.shape != (n_columns, n_states):
-            raise ValueError(
-                f"2D 'init_values' must have shape ({n_columns}, {n_states}): one "
-                f"row per column, one entry per state. Got shape {values.shape}."
-            )
-        return values.T
-    raise ValueError(
-        f"'init_values' must be a scalar, 1D or 2D array. Got shape {values.shape}."
-    )
 
 
 def state_conditional_logits(
@@ -74,27 +35,23 @@ def state_conditional_logits(
 ) -> tf.Tensor:
     """Logits of shape (n_states, n_columns) whose activations equal 'init_values'.
 
+    The logits are computed in numpy (`pypress.core.initializers`) and returned as
+    a float32 tensor.
+
     Args:
       init_values: Values on the original scale, in one of the forms described
         in the module docstring.
       n_states: Number of predictive states, K.
       n_columns: Number of parameters per state, P.
-      activations: One activation name for all columns, or one per column.
+      activations: One activation (a name, Keras function or `Activation`
+        layer) for all columns, or one per column.
 
     Raises:
       ValueError: on a shape mismatch, or an activation without a known inverse.
     """
-    values = state_conditional_values(init_values, n_states, n_columns)
     names = pr_act.names(activations, n_columns)
-    if len(names) != n_columns:
-        raise ValueError(
-            f"Need one activation per column ({n_columns}). Got {len(names)}."
-        )
-    columns = [
-        get_inverse_activation(name)(tf.constant(values[:, i], dtype=tf.float32))
-        for i, name in enumerate(names)
-    ]
-    return tf.stack(columns, axis=1)
+    logits = core_init.state_conditional_logits(init_values, n_states, n_columns, names)
+    return tf.constant(logits, dtype=tf.float32)
 
 
 def _to_config(init_values: InitValues):
@@ -208,58 +165,3 @@ class PredictiveStateParamsInitializer(StateConditionalInitializer):
             parameter.
         """
         super().__init__(init_values=init_values, activations=activations)
-
-
-def initialize_from_y(
-    y: Union[np.ndarray, pd.Series, pd.DataFrame],
-    n_states: int,
-    return_params: bool = False,
-    max_iter: int = 10,
-) -> np.ndarray:
-    """Initial state-conditional values from a 1D Gaussian mixture fitted to y.
-
-    Fits `pypress.clustering.GaussianMixture1D` with `n_states` components to
-    the training outputs, and returns `init_values` for `PredictiveStateMeans`
-    or `PredictiveStateParams`.
-
-    For multi-output y, all outputs are pooled into one 1D sample before the
-    fit, so every output unit gets the same per-state means. This is a simple
-    heuristic: it suits outputs on a common scale.
-
-    Args:
-        y: Training outputs of shape (n_samples,) or (n_samples, n_outputs).
-        n_states: Number of predictive states (mixture components).
-        return_params: If False, returns state-conditional means for
-            `PredictiveStateMeans`. If True, returns [mean, std] per state for
-            `PredictiveStateParams` with a Gaussian parameterization.
-        max_iter: Maximum number of EM iterations. Default is 10.
-
-    Returns:
-        If return_params=False: array of shape (n_outputs, n_states) of the
-            mixture means, the same row for every output.
-        If return_params=True: array of shape (2, n_states); row 0 holds the
-            means and row 1 the standard deviations, for
-            `activations=["linear", "softplus"]`.
-
-    Example:
-        >>> y_train = np.random.randn(1000, 2)
-        >>> layer = PredictiveStateMeans(
-        ...     units=2, init_values=initialize_from_y(y_train, n_states=5)
-        ... )
-        >>> layer = PredictiveStateParams(
-        ...     n_params_per_state=2,
-        ...     activations=["linear", "softplus"],
-        ...     init_values=initialize_from_y(y_train, n_states=5, return_params=True),
-        ... )
-    """
-    from ..clustering import GaussianMixture1D
-
-    y = np.asarray(y.values if isinstance(y, (pd.Series, pd.DataFrame)) else y)
-    units = 1 if y.ndim == 1 else y.shape[1]
-
-    gmm = GaussianMixture1D(n_components=n_states, max_iter=max_iter)
-    gmm.fit(y.ravel())
-
-    if return_params:
-        return np.vstack([gmm.means_, gmm.covariances_])
-    return np.tile(gmm.means_, (units, 1))

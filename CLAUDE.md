@@ -10,6 +10,8 @@ See [README.md](README.md) for the algorithm background, papers, and usage examp
 pypress/
 ├── clustering.py           # Clustering utilities for predictive states
 ├── utils.py                 # State operations, kernel functions
+├── core/                    # Framework-free (no TF, no torch): hyperparameters,
+│                            #   schedules + epoch clock, activation inverses, init values
 ├── keras/
 │   ├── layers.py            # PredictiveStateSimplex, PredictiveStateMeans, PRESS
 │   ├── regularizers.py      # Uniform, DegreesOfFreedom

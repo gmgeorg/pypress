@@ -5,6 +5,25 @@ All notable changes `pypress` will be documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Added
+
+* `pypress.core`: the framework-free parts of the library (hyperparameter
+  declaration and validation, epoch schedules and the training clock, numpy
+  activation inverses, initial-value expansion, statistic names and shapes).
+  Importing `pypress.core`, `pypress.analysis` and `pypress.clustering` needs
+  neither TensorFlow nor PyTorch.
+
+### Changed
+
+* `pypress.keras` delegates these parts to `pypress.core`; every public name and
+  registered Keras name is unchanged. `pypress.keras.schedules.ScheduledValue`
+  now subclasses `pypress.core.schedules.ScheduledValue`, and
+  `pypress.keras.schedules.set_epoch` also sets the core clock.
+* Initial logits for `init_values` are computed in numpy and cast to float32
+  (equal to the previous TensorFlow computation to float32 rounding).
+
 ## pypress v0.5.4 - Nov 5, 2026
 
 No library changes: the demo notebook and development setup only.
