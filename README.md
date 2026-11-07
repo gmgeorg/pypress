@@ -42,13 +42,20 @@ and its degrees of freedom.
 
 `pypress` is distributed from GitHub only:
 
+The deep-learning framework is an optional extra, so pick the backend you use:
+
 ```bash
-pip install git+https://github.com/gmgeorg/pypress.git
+# Keras / TensorFlow 2.16+
+pip install "pypress[tf] @ git+https://github.com/gmgeorg/pypress.git"
+# PyTorch 2.2+
+pip install "pypress[torch] @ git+https://github.com/gmgeorg/pypress.git"
 # or a specific release
-pip install git+https://github.com/gmgeorg/pypress.git@v0.5.4
+pip install "pypress[tf] @ git+https://github.com/gmgeorg/pypress.git@v0.5.4"
 ```
 
-It requires Python 3.12+ and TensorFlow 2.x.
+The base install (`pip install git+https://github.com/gmgeorg/pypress.git`) has only
+the framework-free modules, `pypress.analysis` and `pypress.clustering`, which need just
+numpy and pandas. It requires Python 3.12+.
 
 ## Quick start
 

@@ -17,6 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+* **Breaking (install):** TensorFlow is no longer a base dependency. Install
+  `pypress[tf]` for `pypress.keras` (TensorFlow `>=2.16,<3`), or `pypress[torch]`
+  for the upcoming `pypress.torch` (PyTorch `>=2.2`). The base install has only
+  numpy and pandas. Importing `pypress.keras` or `pypress.torch` without its
+  framework raises an `ImportError` that names the extra to install.
 * `pypress.keras` delegates these parts to `pypress.core`; every public name and
   registered Keras name is unchanged. `pypress.keras.schedules.ScheduledValue`
   now subclasses `pypress.core.schedules.ScheduledValue`, and

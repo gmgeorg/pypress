@@ -181,3 +181,28 @@ def test_core_hyperparameter_deserializes_core_schedules():
     coerced = hp.L2.coerce(serialized)
     assert type(coerced) is core_sched.ScheduledValue
     assert hp.L2.serialize(coerced) == serialized
+
+
+@pytest.mark.parametrize(
+    "package, blocked, extra",
+    [("pypress.keras", "tensorflow", "tf"), ("pypress.torch", "torch", "torch")],
+)
+def test_backend_package_explains_how_to_install_a_missing_framework(
+    package, blocked, extra
+):
+    """Importing a backend without its framework names the extra to install."""
+    code = (
+        "import sys\n"
+        f"sys.modules[{blocked!r}] = None\n"
+        "try:\n"
+        f"    import {package}\n"
+        "except ImportError as error:\n"
+        "    print(error)\n"
+        "else:\n"
+        "    raise SystemExit('import unexpectedly succeeded')\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, timeout=60
+    )
+    assert result.returncode == 0, result.stderr
+    assert f"pypress[{extra}]" in result.stdout
