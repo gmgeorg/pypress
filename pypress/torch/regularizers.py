@@ -251,6 +251,12 @@ class _PenaltyRegularizer(nn.Module):
         )
         self._bound_layer: Optional[weakref.ReferenceType] = None
 
+    def __getstate__(self):
+        """Pickles without the weak reference to the bound layer (it cannot be)."""
+        state = self.__dict__.copy()
+        state["_bound_layer"] = None
+        return state
+
     # -- hyperparameters ---------------------------------------------------
 
     def _value(self, name: str):

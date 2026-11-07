@@ -25,9 +25,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and their step count are buffers: they are in `state_dict()` and move with
   `.to(device)`, and advance only in training mode. A `ScheduledValue` reads a
   Python epoch clock (`schedules.set_epoch`, or `with schedules.epoch_clock()`).
+* `pypress.torch.layers`: `PredictiveStateSimplex`, `PredictiveStateMeans`,
+  `PredictiveStateParams` and `PRESS` as `nn.Module`s, with `n_states` first in
+  each constructor so every parameter exists at construction
+  (`PredictiveStateSimplex(n_states, in_features=None)` is lazy when
+  `in_features` is None). Same default initialization and `init_values` forms as
+  Keras, `flatten_output` keeps the parameter-major order, and `from_keras(layer)`
+  copies a built Keras layer. An activity regularizer attached to a simplex stores
+  its penalty in training mode; add `pypress.torch.regularization_loss(model)` to
+  the loss.
 * Parity tests (`pypress/tests/parity/`) check the torch statistics,
-  regularizer values and gradients, EMA sequences, schedules and configs against
-  Keras.
+  regularizer values and gradients, EMA sequences, schedules, configs, `init_values` logits
+  and layer outputs against Keras.
 
 ### Changed
 
