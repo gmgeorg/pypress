@@ -24,7 +24,12 @@ jobs:
           python-version: "3.12"
 
       - name: Install pypress with the ${{ matrix.extras }} extra(s)
-        run: pip install -e ".[${{ matrix.extras }}]" pytest
+        # CPU-only torch wheels: the default Linux (CUDA) wheels pull in triton,
+        # whose native library aborts the process when loaded after TensorFlow
+        # (torch.optim imports it lazily via torch._dynamo).
+        run: >-
+          pip install -e ".[${{ matrix.extras }}]" pytest
+          --extra-index-url https://download.pytorch.org/whl/cpu
 
       - name: Run tests
         run: python -m pytest pypress/tests/ -v -rs
