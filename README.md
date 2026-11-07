@@ -50,7 +50,7 @@ pip install "pypress[tf] @ git+https://github.com/gmgeorg/pypress.git"
 # PyTorch 2.2+
 pip install "pypress[torch] @ git+https://github.com/gmgeorg/pypress.git"
 # or a specific release
-pip install "pypress[tf] @ git+https://github.com/gmgeorg/pypress.git@v0.5.4"
+pip install "pypress[tf] @ git+https://github.com/gmgeorg/pypress.git@v0.6.0"
 ```
 
 The base install (`pip install git+https://github.com/gmgeorg/pypress.git`) has only
