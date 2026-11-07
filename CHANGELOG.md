@@ -61,6 +61,11 @@ example to the new tag).
 * Initial logits for `init_values` are computed in numpy and cast to float32
   (equal to the previous TensorFlow computation to float32 rounding).
 
+### Fixed
+
+* `pypress.analysis.col_normalize` keeps the `state` name on the columns of a
+  DataFrame result under pandas 3 (pandas 3 no longer carries it over from the divisor).
+
 ## pypress v0.5.4 - Nov 5, 2026
 
 No library changes: the demo notebook and development setup only.
