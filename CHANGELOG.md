@@ -15,6 +15,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Importing `pypress.core`, `pypress.analysis` and `pypress.clustering` needs
   neither TensorFlow nor PyTorch.
 
+* `pypress.torch.statistics`, `pypress.torch.schedules` and
+  `pypress.torch.regularizers`: a native PyTorch port of the PRESS statistics and
+  penalties. `TargetEntropy`, `Uniform`, `StateSizeEntropy`, `MinStateSize`,
+  `DegreesOfFreedom` and `CombinedRegularizer` are `nn.Module`s with the Keras
+  names, hyperparameters and `get_config()` keys, and a plain `penalty(x)`. A
+  config from either backend builds the other
+  (`pypress.torch.regularizers.from_config`). The running averages of `ema_decay`
+  and their step count are buffers: they are in `state_dict()` and move with
+  `.to(device)`, and advance only in training mode. A `ScheduledValue` reads a
+  Python epoch clock (`schedules.set_epoch`, or `with schedules.epoch_clock()`).
+* Parity tests (`pypress/tests/parity/`) check the torch statistics,
+  regularizer values and gradients, EMA sequences, schedules and configs against
+  Keras.
+
 ### Changed
 
 * **Breaking (install):** TensorFlow is no longer a base dependency. Install
