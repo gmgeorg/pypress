@@ -5,6 +5,67 @@ All notable changes `pypress` will be documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+Planned for v0.6.0 (a minor bump: add the `semver:minor` label to the release PR so the
+version-bump workflow raises `[project].version` accordingly, and pin the README install
+example to the new tag).
+
+### Added
+
+* `pypress.core`: the framework-free parts of the library (hyperparameter
+  declaration and validation, epoch schedules and the training clock, numpy
+  activation inverses, initial-value expansion, statistic names and shapes).
+  Importing `pypress.core`, `pypress.analysis` and `pypress.clustering` needs
+  neither TensorFlow nor PyTorch.
+
+* `pypress.torch.statistics`, `pypress.torch.schedules` and
+  `pypress.torch.regularizers`: a native PyTorch port of the PRESS statistics and
+  penalties. `TargetEntropy`, `Uniform`, `StateSizeEntropy`, `MinStateSize`,
+  `DegreesOfFreedom` and `CombinedRegularizer` are `nn.Module`s with the Keras
+  names, hyperparameters and `get_config()` keys, and a plain `penalty(x)`. A
+  config from either backend builds the other
+  (`pypress.torch.regularizers.from_config`). The running averages of `ema_decay`
+  and their step count are buffers: they are in `state_dict()` and move with
+  `.to(device)`, and advance only in training mode. A `ScheduledValue` reads a
+  Python epoch clock (`schedules.set_epoch`, or `with schedules.epoch_clock()`).
+* `pypress.torch.layers`: `PredictiveStateSimplex`, `PredictiveStateMeans`,
+  `PredictiveStateParams` and `PRESS` as `nn.Module`s, with `n_states` first in
+  each constructor so every parameter exists at construction
+  (`PredictiveStateSimplex(n_states, in_features=None)` is lazy when
+  `in_features` is None). Same default initialization and `init_values` forms as
+  Keras, `flatten_output` keeps the parameter-major order, and `from_keras(layer)`
+  copies a built Keras layer. An activity regularizer attached to a simplex stores
+  its penalty in training mode; add `pypress.torch.regularization_loss(model)` to
+  the loss.
+* Tests are split into `pypress/tests/{core,keras,torch,parity}/`; each directory skips
+  itself when its framework is missing. CI runs the suite with `[tf]`, `[torch]` and
+  `[tf,torch]`.
+* `docs/torch.md`: the PyTorch backend, a training loop, where to add the penalty, and the
+  differences from Keras.
+* Parity tests (`pypress/tests/parity/`) check the torch statistics,
+  regularizer values and gradients, EMA sequences, schedules, configs, `init_values` logits
+  and layer outputs against Keras.
+
+### Changed
+
+* **Breaking (install):** TensorFlow is no longer a base dependency. Install
+  `pypress[tf]` for `pypress.keras` (TensorFlow `>=2.16,<3`), or `pypress[torch]`
+  for the upcoming `pypress.torch` (PyTorch `>=2.2`). The base install has only
+  numpy and pandas. Importing `pypress.keras` or `pypress.torch` without its
+  framework raises an `ImportError` that names the extra to install.
+* `pypress.keras` delegates these parts to `pypress.core`; every public name and
+  registered Keras name is unchanged. `pypress.keras.schedules.ScheduledValue`
+  now subclasses `pypress.core.schedules.ScheduledValue`, and
+  `pypress.keras.schedules.set_epoch` also sets the core clock.
+* Initial logits for `init_values` are computed in numpy and cast to float32
+  (equal to the previous TensorFlow computation to float32 rounding).
+
+### Fixed
+
+* `pypress.analysis.col_normalize` keeps the `state` name on the columns of a
+  DataFrame result under pandas 3 (pandas 3 no longer carries it over from the divisor).
+
 ## pypress v0.5.4 - Nov 5, 2026
 
 No library changes: the demo notebook and development setup only.

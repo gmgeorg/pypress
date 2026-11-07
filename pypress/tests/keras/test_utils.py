@@ -4,8 +4,8 @@ import numpy as np
 import pytest
 import tensorflow as tf
 
-from .. import analysis, utils
-from ..keras import initializers, statistics
+from pypress import analysis, utils
+from pypress.keras import initializers, statistics
 
 
 def test_moved_functions_are_re_exported():

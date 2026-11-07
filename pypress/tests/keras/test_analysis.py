@@ -7,8 +7,8 @@ import pandas as pd
 import pytest
 import tensorflow as tf
 
-from .. import analysis
-from ..keras import initializers, statistics
+from pypress import analysis
+from pypress.keras import initializers, statistics
 
 
 def _test_weights() -> Tuple[pd.DataFrame, pd.Series]:

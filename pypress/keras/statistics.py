@@ -9,9 +9,11 @@ average in a variable created before the first batch is seen.
 See CONTEXT.md for the domain terms used here.
 """
 
-from typing import Callable, Dict, Tuple
+from typing import Callable, Dict
 
 import tensorflow as tf
+
+from ..core.statistics import names, shape  # noqa: F401
 
 
 def safe_log(p: tf.Tensor, neg_inf: float = -1e9, name: str | None = None) -> tf.Tensor:
@@ -91,25 +93,16 @@ def degrees_of_freedom(numerator: tf.Tensor, denominator: tf.Tensor) -> tf.Tenso
     return tf.reduce_sum(numerator / tf.maximum(denominator, 1e-8))
 
 
-# name -> (function of the weights, shape as a function of K)
-_STATISTICS: Dict[str, Tuple[Callable[[tf.Tensor], tf.Tensor], Callable]] = {
-    "mean_row_entropy": (mean_row_entropy, lambda n_states: ()),
-    "state_sizes": (state_sizes, lambda n_states: (n_states,)),
-    "trace_numerator": (trace_numerator, lambda n_states: (n_states,)),
-    "trace_denominator": (state_sizes, lambda n_states: (n_states,)),
+# name -> function of the weights. The shape of each statistic is in
+# `pypress.core.statistics`, shared with the PyTorch implementation.
+_STATISTICS: Dict[str, Callable[[tf.Tensor], tf.Tensor]] = {
+    "mean_row_entropy": mean_row_entropy,
+    "state_sizes": state_sizes,
+    "trace_numerator": trace_numerator,
+    "trace_denominator": state_sizes,
 }
 
 
 def compute(name: str, weights: tf.Tensor) -> tf.Tensor:
     """Computes the statistic called 'name' on a batch of predictive state weights."""
-    return _STATISTICS[name][0](weights)
-
-
-def shape(name: str, n_states: int) -> Tuple[int, ...]:
-    """Shape of the statistic called 'name' for 'n_states' predictive states."""
-    return tuple(_STATISTICS[name][1](n_states))
-
-
-def names() -> Tuple[str, ...]:
-    """Names of all known statistics."""
-    return tuple(_STATISTICS)
+    return _STATISTICS[name](weights)

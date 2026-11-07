@@ -1,17 +1,20 @@
 [project]
 name = "pypress"
-version = "0.5.4"
-description = "Predictive State Smoothing (PRESS) in Python (keras)"
+version = "0.6.0"
+description = "Predictive State Smoothing (PRESS) in Python (Keras and PyTorch)"
 authors = [
     {name = "Georg M. Goerg",email = "im@gmge.org"}
 ]
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "tensorflow (>=2.11.0,<3.0.0)",
     "pandas (>=1.5.0)",
     "numpy (>=2.0.0)"
 ]
+
+[project.optional-dependencies]
+tf = ["tensorflow (>=2.16,<3.0.0)"]
+torch = ["torch (>=2.2)"]
 
 
 [build-system]
@@ -19,6 +22,9 @@ requires = ["poetry-core>=2.0.0,<3.0.0"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.poetry.group.dev.dependencies]
+# Both backends, so the whole suite (including the parity tests) runs.
+tensorflow = ">=2.16,<3.0.0"
+torch = ">=2.2"
 pytest = ">=9.1.1"
 seaborn = ">=0.13.2"
 tqdm = ">=4.67.1"

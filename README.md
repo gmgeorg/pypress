@@ -1,4 +1,4 @@
-# pypress: Predictive State Smoothing (PRESS) in Python (`tf.keras`)
+# pypress: Predictive State Smoothing (PRESS) in Python (`tf.keras` and PyTorch)
 
 ![Python](https://img.shields.io/badge/python-3670A0?style=for-the-badge&logo=python&logoColor=ffdd54)
 ![TensorFlow](https://img.shields.io/badge/TensorFlow-%23FF6F00.svg?style=for-the-badge&logo=TensorFlow&logoColor=white)
@@ -42,13 +42,20 @@ and its degrees of freedom.
 
 `pypress` is distributed from GitHub only:
 
+The deep-learning framework is an optional extra, so pick the backend you use:
+
 ```bash
-pip install git+https://github.com/gmgeorg/pypress.git
+# Keras / TensorFlow 2.16+
+pip install "pypress[tf] @ git+https://github.com/gmgeorg/pypress.git"
+# PyTorch 2.2+
+pip install "pypress[torch] @ git+https://github.com/gmgeorg/pypress.git"
 # or a specific release
-pip install git+https://github.com/gmgeorg/pypress.git@v0.5.4
+pip install "pypress[tf] @ git+https://github.com/gmgeorg/pypress.git@v0.6.0"
 ```
 
-It requires Python 3.12+ and TensorFlow 2.x.
+The base install (`pip install git+https://github.com/gmgeorg/pypress.git`) has only
+the framework-free modules, `pypress.analysis` and `pypress.clustering`, which need just
+numpy and pandas. It requires Python 3.12+.
 
 ## Quick start
 
@@ -91,6 +98,9 @@ print(analysis.degrees_of_freedom(W))           # trace(H), the effective number
 print(press.state_conditional_means.numpy())    # one mean per state
 ```
 
+The same model in PyTorch (`pypress.torch`, no TensorFlow needed) is in
+[docs/torch.md](docs/torch.md).
+
 For classification, use `activation="sigmoid"` (or `"softmax"` with `units` = number of classes)
 and a matching loss. [`notebooks/demo.ipynb`](notebooks/demo.ipynb) has end-to-end regression and
 classification examples.
@@ -103,6 +113,8 @@ classification examples.
 | `pypress.keras.regularizers` | Penalties on the predictive state weights: `DegreesOfFreedom`, `MinStateSize`, `StateSizeEntropy`, `TargetEntropy` / `Uniform`, and `CombinedRegularizer` | [docs/regularizers.md](docs/regularizers.md) |
 | `pypress.keras.schedules`, `callbacks` | `ScheduledValue` and `RegularizerScheduler`, to anneal any penalty setting over epochs | [docs/regularizers.md](docs/regularizers.md#scheduling) |
 | `pypress.keras.initializers` | Initialization from original-scale values, and from the outputs (`initialize_from_y`) | [docs/layers.md](docs/layers.md#initialization) |
+| `pypress.torch` | The same layers, regularizers, schedules and statistics as `nn.Module`s, with `regularization_loss` and `from_keras` | [docs/torch.md](docs/torch.md) |
+| `pypress.core` | Framework-free parts shared by both backends: hyperparameters, schedules and the epoch clock, activation inverses, initial values | |
 | `pypress.analysis` | Post-hoc analysis of fitted states: state sizes, smoother matrix, degrees of freedom, per-state summaries | [docs/analysis.md](docs/analysis.md) |
 
 ## Documentation
@@ -112,6 +124,8 @@ classification examples.
 * [docs/layers.md](docs/layers.md): the layers, initialization, and saving models.
 * [docs/regularizers.md](docs/regularizers.md): what each regularizer controls and how to tune
   and schedule it.
+* [docs/torch.md](docs/torch.md): the PyTorch backend, a training loop, and differences from
+  Keras.
 * [docs/analysis.md](docs/analysis.md): interpreting a fitted model.
 * [CONTEXT.md](CONTEXT.md): glossary of the terms used throughout.
 * [CHANGELOG.md](CHANGELOG.md): release notes.

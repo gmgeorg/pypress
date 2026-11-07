@@ -8,7 +8,7 @@ import pandas as pd
 import pytest
 import tensorflow as tf
 
-from ..keras import layers, regularizers
+from pypress.keras import layers, regularizers
 
 
 def _test_data(n_samples: int) -> Tuple[pd.DataFrame, pd.Series]:

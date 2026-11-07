@@ -40,7 +40,10 @@ def state_size(
 def col_normalize(weights: Weights) -> Weights:
     """Divides each column of the weights by its state size."""
     if isinstance(weights, pd.DataFrame):
-        return weights.divide(state_size(weights), axis=1)
+        sizes = state_size(weights)
+        # pandas < 3 carried the divisor's index name ("state") over to the columns;
+        # pandas >= 3 does not, so set it explicitly (on a copy, not the input).
+        return weights.divide(sizes, axis=1).rename_axis(columns=sizes.index.name)
     weights = np.asarray(weights)
     return weights / weights.sum(axis=0, keepdims=True)
 
