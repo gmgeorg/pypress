@@ -8,7 +8,14 @@ on:
 
 jobs:
   test:
+    name: test (${{ matrix.extras }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # core only needs neither framework; each backend's tests skip themselves
+        # when it is missing, and the parity tests need both.
+        extras: ["tf", "torch", "tf,torch"]
     steps:
       - uses: actions/checkout@v4
 
@@ -16,14 +23,11 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install poetry
-        run: pipx install poetry
-
-      - name: Install dependencies
-        run: poetry install --no-interaction
+      - name: Install pypress with the ${{ matrix.extras }} extra(s)
+        run: pip install -e ".[${{ matrix.extras }}]" pytest
 
       - name: Run tests
-        run: poetry run pytest pypress/tests/ -v
+        run: python -m pytest pypress/tests/ -v -rs
 
   pre-commit:
     runs-on: ubuntu-latest

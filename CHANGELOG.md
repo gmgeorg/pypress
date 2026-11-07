@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+Planned for v0.6.0 (a minor bump: add the `semver:minor` label to the release PR so the
+version-bump workflow raises `[project].version` accordingly, and pin the README install
+example to the new tag).
+
 ### Added
 
 * `pypress.core`: the framework-free parts of the library (hyperparameter
@@ -34,6 +38,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   copies a built Keras layer. An activity regularizer attached to a simplex stores
   its penalty in training mode; add `pypress.torch.regularization_loss(model)` to
   the loss.
+* Tests are split into `pypress/tests/{core,keras,torch,parity}/`; each directory skips
+  itself when its framework is missing. CI runs the suite with `[tf]`, `[torch]` and
+  `[tf,torch]`.
+* `docs/torch.md`: the PyTorch backend, a training loop, where to add the penalty, and the
+  differences from Keras.
 * Parity tests (`pypress/tests/parity/`) check the torch statistics,
   regularizer values and gradients, EMA sequences, schedules, configs, `init_values` logits
   and layer outputs against Keras.
